@@ -10,10 +10,12 @@ import com.example.emoo.model.FolderSort
 import com.example.emoo.model.ImageItem
 import com.example.emoo.model.RecentEntry
 import com.example.emoo.model.StickerSortMode
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -118,10 +120,51 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /** 解析文件夹生效排序（未设置过即默认序） */
     private fun resolveSort(folder: String): FolderSort? = meta.getFolderSorts()[folder]
 
-    /** 保存文件夹的自定义排序 */
+    /** 保存文件夹的排序设置（弹窗「确认」：按所选方式排序） */
     fun setFolderSort(folder: String, sort: FolderSort) {
         meta.setFolderSort(folder, sort)
         if (_state.value.selectedFolder == folder) refresh()
+    }
+
+    /**
+     * 弹窗「覆盖自定义」：把当前列表按所选方式+倒序排一遍，
+     * 结果整表写入该文件夹的自定义顺序文件，并把排序切回「自定义」。
+     */
+    fun overwriteCustomSort(folder: String, sort: FolderSort, onResult: (Boolean) -> Unit) {
+        val items = _state.value.images
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                ImageRepository.overwriteCustomOrder(
+                    context, folder, items, sort.mode, sort.reverse, meta.getUsageCounts()
+                )
+            }
+            if (ok) setFolderSort(folder, FolderSort(StickerSortMode.DEFAULT, false))
+            onResult(ok)
+        }
+    }
+
+    /**
+     * 长按图片 -> 移到最前/移至最后：以当前展示顺序为基准调整该图片位置后
+     * 写入自定义顺序文件，并把该文件夹排序切回「自定义」。仅限单文件夹浏览态。
+     */
+    fun moveImageToEdge(image: ImageItem, front: Boolean, onResult: (Boolean) -> Unit) {
+        val st = _state.value
+        val folder = image.folderName
+        if (st.searchActive || st.selectedFolder != folder) {
+            onResult(false)
+            return
+        }
+        val names = st.images.map { it.displayName }.toMutableList()
+        if (!names.remove(image.displayName)) {
+            onResult(false)
+            return
+        }
+        if (front) names.add(0, image.displayName) else names.add(image.displayName)
+        viewModelScope.launch {
+            val ok = ImageRepository.saveCustomOrder(context, folder, names)
+            if (ok) setFolderSort(folder, FolderSort(StickerSortMode.DEFAULT, false))
+            onResult(ok)
+        }
     }
 
     /** 进入搜索态：扫全库备用，但列表初始为空白，输入关键字后展示过滤结果。
@@ -303,6 +346,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 refresh()
             }
             onResult(renamed != null)
+        }
+    }
+
+    /** 查看页编辑文字：覆写 .txt 正文并同步 sha 映射，成功后刷新（网格预览随之更新） */
+    fun editTextFile(image: ImageItem, text: String, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val ok = ImageRepository.saveTextFile(context, image, text)
+            if (ok) refresh()
+            onResult(ok)
         }
     }
 

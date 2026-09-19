@@ -41,6 +41,9 @@ enum class SendResult {
     /** 微信未把路径识别为图片（已清空输入框，未发送任何内容） */
     NOT_RECOGNIZED,
 
+    /** 视频发送到微信暂不支持（前台聊天窗为微信且所选文件为视频） */
+    WECHAT_VIDEO_UNSUPPORTED,
+
     /** 其他失败 */
     FAILED
 }
@@ -103,6 +106,8 @@ object ImageSender {
             if (!ShizukuDragInjector.isAvailable()) return@withContext SendResult.SHIZUKU_UNAVAILABLE
             return@withContext withContext(Dispatchers.IO) {
                 if (ShizukuSender.windowBounds(WECHAT_PACKAGE) != null) {
+                    // 视频经微信路径识别发送不可行，暂不支持（QQ 拖拽仍可用）
+                    if (image.isVideo) return@withContext SendResult.WECHAT_VIDEO_UNSUPPORTED
                     // 微信：不再区分 GIF/非 GIF，统一走“复制路径→点输入框→清空→粘贴→点发送”。
                     // 拖拽方案暂时停用（保留代码备查）：
                     // if (image.isGif) ShizukuSender.sendWechat(context, image)
@@ -129,7 +134,8 @@ object ImageSender {
         }
         when {
             scan.targets.containsKey(WECHAT_PACKAGE) ->
-                sendViaWechat(service, context, image, scan.targets[WECHAT_PACKAGE])
+                if (image.isVideo) SendResult.WECHAT_VIDEO_UNSUPPORTED
+                else sendViaWechat(service, context, image, scan.targets[WECHAT_PACKAGE])
             scan.targets.containsKey(QQ_PACKAGE) ->
                 sendViaQQDrag(service, context, sourceCenter)
             else -> {

@@ -37,6 +37,8 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.MoveDown
+import androidx.compose.material.icons.filled.MoveUp
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -172,6 +174,7 @@ fun GalleryScreen(
                     }
                 }
                 SendResult.NOT_RECOGNIZED -> "微信未能识别图片路径，已取消发送"
+                SendResult.WECHAT_VIDEO_UNSUPPORTED -> "暂不支持发送视频到微信（可拖拽发送到 QQ）"
                 SendResult.FAILED -> "发送失败，可重试或手动发送"
             }
             snackbarHostState.showSnackbar(message)
@@ -369,6 +372,45 @@ fun GalleryScreen(
                     }
                 }
             )
+            // 移到最前 / 移至最后：调整所在文件夹的自定义顺序（仅单文件夹浏览态）
+            if (state.selectedFolder == image.folderName && !state.searchActive) {
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    TextButton(
+                        onClick = {
+                            val target = image
+                            longPressImage = null
+                            viewModel.moveImageToEdge(target, front = true) { ok ->
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        if (ok) "已移到最前（自定义顺序）" else "移动失败"
+                                    )
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Filled.MoveUp, contentDescription = null)
+                        Text("移到最前", modifier = Modifier.padding(start = 6.dp))
+                    }
+                    TextButton(
+                        onClick = {
+                            val target = image
+                            longPressImage = null
+                            viewModel.moveImageToEdge(target, front = false) { ok ->
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        if (ok) "已移至最后（自定义顺序）" else "移动失败"
+                                    )
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Filled.MoveDown, contentDescription = null)
+                        Text("移至最后", modifier = Modifier.padding(start = 6.dp))
+                    }
+                }
+            }
             if (!image.isText) {
                 ListItem(
                     headlineContent = { Text("设为「${image.folderName}」的预览图") },
@@ -608,16 +650,32 @@ fun GalleryScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val appliedFolder = sortFolder?.takeIf { sortable }
                     if (appliedFolder != null) {
+                        // 覆盖自定义：把当前排序方式的结果固化进自定义顺序文件
                         TextButton(onClick = {
                             showReorderDialog = false
+                            val modeLabel = sortModeLabel(sortMode)
+                            viewModel.overwriteCustomSort(
+                                appliedFolder, FolderSort(sortMode, sortReverse)
+                            ) { ok ->
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        if (ok) "已用「$modeLabel」结果覆盖「$appliedFolder」自定义排序"
+                                        else "覆盖自定义排序失败"
+                                    )
+                                }
+                            }
+                        }) { Text("覆盖自定义") }
+                        // 确认：仅按当前选择的排序方式排序
+                        TextButton(onClick = {
+                            showReorderDialog = false
+                            val modeLabel = sortModeLabel(sortMode)
                             viewModel.setFolderSort(
                                 appliedFolder, FolderSort(sortMode, sortReverse)
                             )
                             scope.launch {
-                                snackbarHostState.showSnackbar("已覆盖「$appliedFolder」自定义排序")
+                                snackbarHostState.showSnackbar("已按「$modeLabel」排序")
                             }
-                        }) { Text("覆盖自定义") }
-                        TextButton(onClick = { showReorderDialog = false }) { Text("确认") }
+                        }) { Text("确认") }
                     } else {
                         TextButton(onClick = { showReorderDialog = false }) { Text("完成") }
                     }
@@ -817,19 +875,19 @@ private fun sortModeLabel(mode: StickerSortMode): String = when (mode) {
 /** 排序方式说明：随倒序开关切换正向/反向文案 */
 private fun sortModeHint(mode: StickerSortMode, reverse: Boolean): String = when (mode) {
     StickerSortMode.DEFAULT -> if (!reverse) {
-        "按当前自定义顺序（导入先后，新导入在前）"
+        "按自定义顺序排列（长按图片可「移到最前/移至最后」调整）"
     } else {
-        "自定义顺序反向：最早导入在前，最新在后"
+        "自定义顺序反向显示"
     }
     StickerSortMode.CREATION -> if (!reverse) {
-        "按文件系统创建时间，新创建在前"
+        "按原始创建时间（导入时尽力保留），新创建在前"
     } else {
-        "按文件系统创建时间，早创建在前"
+        "按原始创建时间（导入时尽力保留），早创建在前"
     }
     StickerSortMode.USAGE -> if (!reverse) {
-        "按发送使用次数，常用在前"
+        "按发送使用次数，常用在前；可在设置中打开「显示使用次数」角标"
     } else {
-        "按发送使用次数，少用在前"
+        "按发送使用次数，少用在前；可在设置中打开「显示使用次数」角标"
     }
     StickerSortMode.RANDOM -> "每次进入或刷新时随机打乱"
     StickerSortMode.NAME -> if (!reverse) {

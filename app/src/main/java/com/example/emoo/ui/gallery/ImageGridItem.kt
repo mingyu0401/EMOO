@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BrokenImage
@@ -190,7 +191,7 @@ fun ImageGridItem(
                     .padding(horizontal = 4.dp, vertical = 1.dp)
             )
         }
-        // 使用次数角标（设置页开关控制），与类型角标分列两侧
+        // 使用次数角标（设置页开关控制）：左上角圆形、青色半透明
         if (usageCount != null && usageCount > 0) {
             Text(
                 text = "×$usageCount",
@@ -198,11 +199,11 @@ fun ImageGridItem(
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
                 modifier = Modifier
-                    .align(Alignment.BottomEnd)
+                    .align(Alignment.TopStart)
                     .padding(3.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(Color(0x99000000))
-                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x9900BCD4))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
             )
         }
     }

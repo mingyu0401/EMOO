@@ -53,6 +53,15 @@ object ImageRepository {
     /** 文件夹内导入顺序序列文件：每行一个文件名，按导入先后追加（同 HASH 文件机制） */
     private const val SEQ_FILE_NAME = ".emoo_seq"
 
+    /** 文件夹内自定义顺序文件：每行一个文件名，行序即展示顺序（首行在最前） */
+    private const val CUSTOM_FILE_NAME = ".emoo_custom"
+
+    /** 文件夹内时间记录文件：每行 `<文件名>\t<原始创建时间>\t<导入时间>`，未知记 -1 */
+    private const val TIME_FILE_NAME = ".emoo_times"
+
+    /** 单个文件的时间记录：原始创建时间（导入时尽力保留）与导入时间 */
+    data class TimeRecord(val creationTime: Long? = null, val importTime: Long? = null)
+
     fun getRootDir(context: Context): File =
         File(context.getExternalFilesDir(null) ?: context.filesDir, "pictures")
 
@@ -98,14 +107,16 @@ object ImageRepository {
         return name.take(64)
     }
 
-    private fun File.toImageItem(): ImageItem = ImageItem(
+    private fun File.toImageItem(record: TimeRecord? = null): ImageItem = ImageItem(
         id = -1L,
         uriString = Uri.fromFile(this).toString(),
         path = absolutePath,
         displayName = name,
         folderName = parentFile?.name ?: "",
-        addedTime = lastModified(),
-        creationTime = runCatching {
+        // 有导入时间记录用记录值；老文件回退文件系统 lastModified
+        addedTime = record?.importTime ?: lastModified(),
+        // 有原始创建时间记录（导入时保留的源文件时间）优先；否则取文件系统创建时间
+        creationTime = record?.creationTime ?: runCatching {
             java.nio.file.Files.readAttributes(toPath(), java.nio.file.attribute.BasicFileAttributes::class.java)
                 .creationTime().toMillis()
         }.getOrNull(),
@@ -136,6 +147,24 @@ object ImageRepository {
             }
         }.getOrDefault("")
     }
+
+    /** 保存对文字文件的修改：覆写正文并同步 sha256↔文件名 映射 */
+    suspend fun saveTextFile(context: Context, image: ImageItem, text: String): Boolean =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val file = File(image.path)
+                if (!file.isFile || !isSupportedText(file.name)) return@withContext false
+                file.writeText(text)
+                file.parentFile?.let { dir ->
+                    val map = readHashMap(dir)
+                    val oldKey = map.entries.firstOrNull { it.value == file.name }?.key
+                    if (oldKey != null) map.remove(oldKey)
+                    file.sha256Hex()?.let { map[it] = file.name }
+                    writeHashMap(dir, map)
+                }
+                true
+            }.getOrDefault(false)
+        }
 
     // ================================ 目录扫描 ================================
 
@@ -176,7 +205,14 @@ object ImageRepository {
         } catch (_: Exception) {
             return@withContext emptyList()
         }
-        val items = files.filter { isSupportedMedia(it.name) }.map { it.toImageItem() }
+        val timeCache = HashMap<String, Map<String, TimeRecord>>()
+        val items = files.filter { isSupportedMedia(it.name) }.map { file ->
+            val dir = file.parentFile
+            val records = dir?.path?.let { key ->
+                timeCache.getOrPut(key) { readTimeMap(dir) }
+            } ?: emptyMap()
+            file.toImageItem(records[file.name])
+        }
         if (folder == null) {
             items.sortedByDescending { it.addedTime }
         } else {
@@ -185,9 +221,10 @@ object ImageRepository {
     }
 
     /**
-     * 文件夹内展示排序：默认=导入顺序（序列文件，新导入在前，无序列记录的回退创建时间），
-     * 创建时间=文件系统 lastModified，使用次数=计数降序，名称=文件名升序，随机=每次打乱。
-     * 倒序对 默认/创建时间/使用次数/名称 取反；随机本身无序，忽略倒序。
+     * 文件夹内展示排序：自定义=顺序文件（`.emoo_custom`，无则回退导入序列/时间），
+     * 创建时间=原始创建时间（导入时记录，无记录回退文件系统时间），
+     * 使用次数=计数降序，名称=文件名升序，随机=每次打乱。
+     * 倒序对 自定义/创建时间/使用次数/名称 取反；随机本身无序，忽略倒序。
      */
     fun sortForDisplay(
         items: List<ImageItem>,
@@ -199,12 +236,21 @@ object ImageRepository {
         if (items.isEmpty()) return items
         val sorted: List<ImageItem> = when (sortMode) {
             StickerSortMode.DEFAULT -> {
-                val seq = readSeq(dir)
                 val byTime = items.sortedByDescending { it.addedTime }
-                if (seq.isEmpty()) return byTime
-                val maxSeq = seq.values.max()
-                byTime.sortedByDescending { item: ImageItem ->
-                    (seq[item.displayName] ?: (maxSeq + item.addedTime)).toLong()
+                val custom = readCustom(dir)
+                if (custom.isNotEmpty()) {
+                    val pos = HashMap<String, Int>()
+                    custom.forEachIndexed { i, n -> pos.putIfAbsent(n, i) }
+                    byTime.sortedBy { pos[it.displayName] ?: Int.MAX_VALUE }
+                } else {
+                    val seq = readSeq(dir)
+                    if (seq.isEmpty()) byTime
+                    else {
+                        val maxSeq = seq.values.max()
+                        byTime.sortedByDescending { item: ImageItem ->
+                            (seq[item.displayName] ?: (maxSeq + item.addedTime)).toLong()
+                        }
+                    }
                 }
             }
             StickerSortMode.CREATION -> items.sortedWith(
@@ -274,6 +320,147 @@ object ImageRepository {
         }
     }
 
+    // ================================ 自定义顺序文件 ================================
+
+    private fun readCustom(dir: File): List<String> {
+        val file = File(dir, CUSTOM_FILE_NAME)
+        if (!file.exists()) return emptyList()
+        return runCatching { file.readLines().filter { it.isNotEmpty() } }.getOrDefault(emptyList())
+    }
+
+    /** 整表写入自定义顺序（行序=展示顺序，首行在最前） */
+    private fun writeCustom(dir: File, names: List<String>) {
+        runCatching { File(dir, CUSTOM_FILE_NAME).writeText(names.joinToString("\n")) }
+    }
+
+    /** 导入时若自定义文件已存在，把新文件名插到最前（与"新导入在前"一致） */
+    private fun prependCustom(dir: File, names: List<String>) {
+        if (names.isEmpty() || !File(dir, CUSTOM_FILE_NAME).exists()) return
+        runCatching {
+            val existing = readCustom(dir).filterNot { names.contains(it) }
+            writeCustom(dir, names.reversed() + existing)
+        }
+    }
+
+    private fun removeCustomEntry(dir: File, name: String) {
+        val lines = readCustom(dir)
+        if (lines.isEmpty() || name !in lines) return
+        writeCustom(dir, lines.filter { it != name })
+    }
+
+    private fun renameCustomEntry(dir: File, oldName: String, newName: String) {
+        val lines = readCustom(dir)
+        if (lines.isEmpty() || oldName == newName || oldName !in lines) return
+        writeCustom(dir, lines.map { if (it == oldName) newName else it })
+    }
+
+    /** 用户手动调整（移到最前/移至最后）或"覆盖自定义"时整表保存展示顺序 */
+    suspend fun saveCustomOrder(context: Context, folder: String, names: List<String>): Boolean =
+        withContext(Dispatchers.IO) {
+            val dir = File(getRootDir(context), folder)
+            if (!dir.isDirectory) return@withContext false
+            writeCustom(dir, names)
+            File(dir, CUSTOM_FILE_NAME).exists()
+        }
+
+    /** 按当前排序方式的结果覆盖该文件夹的"自定义"顺序 */
+    suspend fun overwriteCustomOrder(
+        context: Context,
+        folder: String,
+        items: List<ImageItem>,
+        sortMode: StickerSortMode,
+        reverse: Boolean,
+        usageCounts: Map<String, Int>
+    ): Boolean = withContext(Dispatchers.IO) {
+        val dir = File(getRootDir(context), folder)
+        if (!dir.isDirectory) return@withContext false
+        val ordered = sortForDisplay(items, sortMode, reverse, usageCounts, dir)
+            .map { it.displayName }
+        writeCustom(dir, ordered)
+        true
+    }
+
+    // ================================ 时间记录文件 ================================
+
+    private fun readTimeMap(dir: File): Map<String, TimeRecord> {
+        val file = File(dir, TIME_FILE_NAME)
+        if (!file.exists()) return emptyMap()
+        val map = LinkedHashMap<String, TimeRecord>()
+        runCatching {
+            file.readLines().forEach { line ->
+                val parts = line.split('\t')
+                if (parts.size >= 3 && parts[0].isNotEmpty()) {
+                    map[parts[0]] = TimeRecord(
+                        creationTime = parts[1].toLongOrNull()?.takeIf { it > 0 },
+                        importTime = parts[2].toLongOrNull()?.takeIf { it > 0 }
+                    )
+                }
+            }
+        }
+        return map
+    }
+
+    private fun writeTimeMap(dir: File, map: Map<String, TimeRecord>) {
+        runCatching {
+            File(dir, TIME_FILE_NAME).writeText(
+                map.entries.joinToString("\n") { (name, r) ->
+                    "$name\t${r.creationTime ?: -1}\t${r.importTime ?: -1}"
+                }
+            )
+        }
+    }
+
+    /** 导入完成后登记各文件的原始创建时间与导入时间（合并旧记录） */
+    private fun recordTimes(dir: File, records: Map<String, TimeRecord>) {
+        if (records.isEmpty()) return
+        val map = LinkedHashMap(readTimeMap(dir)).apply { putAll(records) }
+        writeTimeMap(dir, map)
+    }
+
+    private fun removeTimeEntry(dir: File, name: String) {
+        val map = readTimeMap(dir)
+        if (!map.containsKey(name)) return
+        writeTimeMap(dir, map - name)
+    }
+
+    private fun renameTimeEntry(dir: File, oldName: String, newName: String) {
+        val record = readTimeMap(dir)[oldName] ?: return
+        runCatching {
+            val map = LinkedHashMap(readTimeMap(dir))
+            map.remove(oldName)
+            map[newName] = record
+            writeTimeMap(dir, map)
+        }
+    }
+
+    /**
+     * 尽力获取来源文件的原始创建时间（毫秒）：
+     * file:// 直接读文件系统创建时间；content:// 查 MediaStore 的
+     * DATE_TAKEN（拍摄时间）与 DATE_ADDED（入库时间）作近似，取不到返回 null。
+     */
+    private fun sourceCreationTime(context: Context, source: Uri): Long? {
+        if (source.scheme == "file") {
+            val path = source.path ?: return null
+            return runCatching {
+                java.nio.file.Files.readAttributes(
+                    File(path).toPath(), java.nio.file.attribute.BasicFileAttributes::class.java
+                ).creationTime().toMillis()
+            }.getOrNull()
+        }
+        val resolver = context.contentResolver
+        runCatching {
+            resolver.query(source, arrayOf("datetaken"), null, null, null)?.use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) return c.getLong(0)
+            }
+        }
+        runCatching {
+            resolver.query(source, arrayOf("date_added"), null, null, null)?.use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) return c.getLong(0) * 1000
+            }
+        }
+        return null
+    }
+
     // ================================ 文件夹操作 ================================
 
     /** 创建真实文件夹（私有目录直接 mkdirs，空目录可被 File API 正常列出） */
@@ -311,6 +498,8 @@ object ImageRepository {
                 if (ok) {
                     file.parentFile?.let { dir ->
                         removeSeqEntry(dir, file.name)
+                        removeCustomEntry(dir, file.name)
+                        removeTimeEntry(dir, file.name)
                         val map = readHashMap(dir)
                         val key = map.entries.firstOrNull { it.value == file.name }?.key
                         if (key != null) {
@@ -347,6 +536,8 @@ object ImageRepository {
                 }
                 val finalFile = File(dir, name)
                 renameSeqEntry(dir, old.name, name)
+                renameCustomEntry(dir, old.name, name)
+                renameTimeEntry(dir, old.name, name)
                 val map = readHashMap(dir)
                 val key = map.entries.firstOrNull { it.value == old.name }?.key
                     ?: finalFile.sha256Hex()
@@ -379,12 +570,16 @@ object ImageRepository {
         val existingFiles = dir.listFiles()?.filter { it.isFile } ?: emptyList()
         val existing = mutableSetOf<String>().apply { existingFiles.forEach { add(it.name.lowercase()) } }
         val imported = mutableListOf<ImageItem>()
+        val timeRecords = LinkedHashMap<String, TimeRecord>()
         candidates.forEachIndexed { index, candidate ->
             coroutineContext.ensureActive()
             val finalName = uniqueName(candidate.name, existing)
             existing.add(finalName.lowercase())
+            val creation = sourceCreationTime(context, candidate.uri)
             copyOne(context, candidate.uri, finalName, dir)?.let { item ->
                 imported.add(item)
+                timeRecords[item.displayName] =
+                    TimeRecord(creationTime = creation, importTime = System.currentTimeMillis())
                 onCopied(item)
             }
             onProgress(index + 1, candidates.size, finalName)
@@ -393,6 +588,8 @@ object ImageRepository {
             applyImportPosition(imported, existingFiles, atFront)
             recordHashes(dir, imported)
             appendSeq(dir, imported.map { it.displayName })
+            prependCustom(dir, imported.map { it.displayName })
+            recordTimes(dir, timeRecords)
         }
         imported
     }
@@ -414,13 +611,16 @@ object ImageRepository {
         val existingFiles = dir.listFiles()?.filter { it.isFile } ?: emptyList()
         val existing = mutableSetOf<String>().apply { existingFiles.forEach { add(it.name.lowercase()) } }
         val imported = mutableListOf<ImageItem>()
+        val timeRecords = LinkedHashMap<String, TimeRecord>()
         paragraphs.forEachIndexed { index, text ->
             coroutineContext.ensureActive()
             val finalName = uniqueName(textFileName(text), existing)
             existing.add(finalName.lowercase())
             try {
                 File(dir, finalName).writeText(text)
-                imported.add(File(dir, finalName).toImageItem())
+                val item = File(dir, finalName).toImageItem()
+                imported.add(item)
+                timeRecords[finalName] = TimeRecord(importTime = System.currentTimeMillis())
             } catch (_: Exception) {
             }
             onProgress(index + 1, paragraphs.size, finalName)
@@ -429,6 +629,8 @@ object ImageRepository {
             applyImportPosition(imported, existingFiles, atFront)
             recordHashes(dir, imported)
             appendSeq(dir, imported.map { it.displayName })
+            prependCustom(dir, imported.map { it.displayName })
+            recordTimes(dir, timeRecords)
         }
         imported
     }

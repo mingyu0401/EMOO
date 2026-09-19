@@ -7,27 +7,36 @@ import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -160,7 +169,7 @@ fun ImageViewerScreen(
         ) { page ->
             val image = images[page]
             if (image.isText) {
-                TextReaderPage(image)
+                TextReaderPage(image, viewModel)
             } else {
                 Box(modifier = Modifier.fillMaxSize()) {
                     AsyncImage(
@@ -203,12 +212,14 @@ fun ImageViewerScreen(
     }
 }
 
-/** 文字查看页：底色/文字跟随深浅色主题，可滚动显示全文，右下角提供"复制全文" */
+/** 文字查看页：底色/文字跟随深浅色主题，可滚动显示全文，右下角"复制全文/编辑" */
 @Composable
-private fun TextReaderPage(image: ImageItem) {
+private fun TextReaderPage(image: ImageItem, viewModel: GalleryViewModel) {
     val context = LocalContext.current
     var content by remember(image.path) { mutableStateOf<String?>(null) }
-    LaunchedEffect(image.path) {
+    var reloadKey by remember(image.path) { mutableIntStateOf(0) }
+    var showEditDialog by remember(image.path) { mutableStateOf(false) }
+    LaunchedEffect(image.path, reloadKey) {
         content = ImageRepository.readTextFile(image.path)
     }
     Box(
@@ -229,18 +240,65 @@ private fun TextReaderPage(image: ImageItem) {
                 lineHeight = 24.sp
             )
         }
-        Button(
-            onClick = {
-                val full = content.orEmpty()
-                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("emoo_text", full))
-            },
+        Row(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(16.dp)
         ) {
-            Text("复制全文")
+            Button(
+                onClick = {
+                    val full = content.orEmpty()
+                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("emoo_text", full))
+                }
+            ) {
+                Text("复制全文")
+            }
+            Spacer(Modifier.width(12.dp))
+            Button(onClick = { showEditDialog = true }) {
+                Icon(Icons.Filled.Edit, contentDescription = null)
+                Text("编辑", modifier = Modifier.padding(start = 4.dp))
+            }
         }
+    }
+
+    // 编辑正文：多行输入，保存后覆写 .txt 并同步 sha 映射与网格预览
+    if (showEditDialog) {
+        var draft by remember(image.path) { mutableStateOf(content.orEmpty()) }
+        AlertDialog(
+            onDismissRequest = { showEditDialog = false },
+            title = { Text("编辑文字") },
+            text = {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .fillMaxHeight(0.6f),
+                    shape = RoundedCornerShape(10.dp)
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showEditDialog = false
+                    viewModel.editTextFile(image, draft) { ok ->
+                        if (ok) {
+                            reloadKey++
+                            android.widget.Toast
+                                .makeText(context, "已保存修改", android.widget.Toast.LENGTH_SHORT)
+                                .show()
+                        } else {
+                            android.widget.Toast
+                                .makeText(context, "保存失败", android.widget.Toast.LENGTH_SHORT)
+                                .show()
+                        }
+                    }
+                }) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditDialog = false }) { Text("取消") }
+            }
+        )
     }
 }
 

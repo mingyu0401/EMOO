@@ -37,9 +37,9 @@ data class ImageItem(
     val path: String,
     val displayName: String,
     val folderName: String,
-    /** 导入时间（文件系统 lastModified，导入位置通过改写它实现） */
+    /** 导入时间：优先取文件夹内 `.emoo_times` 记录，无记录回退文件系统 lastModified */
     val addedTime: Long,
-    /** 文件系统创建时间；取不到（旧设备/不支持）为 null */
+    /** 原始创建时间：优先取导入时记录的源文件时间，其次文件系统创建时间；取不到为 null */
     val creationTime: Long? = null,
     val size: Long,
     /** 文字文件（.txt）正文前缀，供网格卡片显示；图片/视频为 null */
@@ -63,9 +63,9 @@ data class ImageItem(
 
 /** 文件夹内表情包的排序方式 */
 enum class StickerSortMode {
-    /** 导入顺序（.emoo_seq 序列文件），新导入在前 */
+    /** 用户自定义顺序（`.emoo_custom`；无自定义文件时回退导入序列/时间），新导入在前 */
     DEFAULT,
-    /** 文件系统创建时间 */
+    /** 原始创建时间（导入时记录，取不到回退文件系统时间） */
     CREATION,
     /** 发送使用次数（含手动点选发送），多者在前 */
     USAGE,
