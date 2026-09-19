@@ -3,6 +3,7 @@ package com.example.emoo.data
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.example.emoo.model.FolderSort
 import com.example.emoo.model.ImageItem
 import com.example.emoo.model.ImportCandidate
 import com.example.emoo.model.StickerSortMode
@@ -58,6 +59,18 @@ object ImageRepository {
 
     /** 文件夹内时间记录文件：每行 `<文件名>\t<原始创建时间>\t<导入时间>`，未知记 -1 */
     private const val TIME_FILE_NAME = ".emoo_times"
+
+    /** 文件夹内排序设置文件：单行 `<mode>\t<reverse>` */
+    private const val SORT_FILE_NAME = ".emoo_sort"
+
+    /** 文件夹内使用次数文件：每行 `<文件名>\t<次数>` */
+    private const val USAGE_FILE_NAME = ".emoo_usage"
+
+    /** 文件夹内预览图文件：单行文件名 */
+    private const val PREVIEW_FILE_NAME = ".emoo_preview"
+
+    /** 根目录内文件夹自定义顺序文件：每行一个文件夹名，行序即展示顺序 */
+    private const val FOLDER_ORDER_FILE_NAME = ".emoo_folder_order"
 
     /** 单个文件的时间记录：原始创建时间（导入时尽力保留）与导入时间 */
     data class TimeRecord(val creationTime: Long? = null, val importTime: Long? = null)
@@ -183,14 +196,13 @@ object ImageRepository {
     /**
      * 列出图片。[folder] 为 null 时聚合全部文件夹（固定按创建时间倒序），
      * 否则按 [sortMode] 应用该文件夹的展示排序（详见 [sortForDisplay]）。
-     * [usageCounts] 仅 USAGE 排序需要，由调用方从 MetaPreferences 传入。
+     * USAGE 排序所需的计数从文件夹内 `.emoo_usage` 文件读取。
      */
     suspend fun listImages(
         context: Context,
         folder: String?,
         sortMode: StickerSortMode = StickerSortMode.DEFAULT,
-        reverse: Boolean = false,
-        usageCounts: Map<String, Int> = emptyMap()
+        reverse: Boolean = false
     ): List<ImageItem> = withContext(Dispatchers.IO) {
         val root = getRootDir(context)
         val files = try {
@@ -216,21 +228,20 @@ object ImageRepository {
         if (folder == null) {
             items.sortedByDescending { it.addedTime }
         } else {
-            sortForDisplay(items, sortMode, reverse, usageCounts, File(root, folder))
+            sortForDisplay(items, sortMode, reverse, File(root, folder))
         }
     }
 
     /**
      * 文件夹内展示排序：自定义=顺序文件（`.emoo_custom`，无则回退导入序列/时间），
      * 创建时间=原始创建时间（导入时记录，无记录回退文件系统时间），
-     * 使用次数=计数降序，名称=文件名升序，随机=每次打乱。
+     * 使用次数=计数降序（`.emoo_usage`），名称=文件名升序，随机=每次打乱。
      * 倒序对 自定义/创建时间/使用次数/名称 取反；随机本身无序，忽略倒序。
      */
     fun sortForDisplay(
         items: List<ImageItem>,
         sortMode: StickerSortMode,
         reverse: Boolean,
-        usageCounts: Map<String, Int>,
         dir: File
     ): List<ImageItem> {
         if (items.isEmpty()) return items
@@ -257,11 +268,13 @@ object ImageRepository {
                 compareByDescending<ImageItem> { it.creationTime ?: it.addedTime }
                     .thenByDescending { it.addedTime }
             )
-            StickerSortMode.USAGE ->
+            StickerSortMode.USAGE -> {
+                val usage = readUsageMap(dir)
                 items.sortedWith(
-                    compareByDescending<ImageItem> { usageCounts[it.path] ?: 0 }
+                    compareByDescending<ImageItem> { usage[it.displayName] ?: 0 }
                         .thenByDescending { it.addedTime }
                 )
+            }
             StickerSortMode.NAME ->
                 items.sortedWith(
                     compareBy(String.CASE_INSENSITIVE_ORDER) { item: ImageItem -> item.displayName }
@@ -369,16 +382,229 @@ object ImageRepository {
         folder: String,
         items: List<ImageItem>,
         sortMode: StickerSortMode,
-        reverse: Boolean,
-        usageCounts: Map<String, Int>
+        reverse: Boolean
     ): Boolean = withContext(Dispatchers.IO) {
         val dir = File(getRootDir(context), folder)
         if (!dir.isDirectory) return@withContext false
-        val ordered = sortForDisplay(items, sortMode, reverse, usageCounts, dir)
+        val ordered = sortForDisplay(items, sortMode, reverse, dir)
             .map { it.displayName }
         writeCustom(dir, ordered)
         true
     }
+
+    // ================================ 排序设置文件（每文件夹） ================================
+
+    private fun readSortFile(dir: File): FolderSort? {
+        val file = File(dir, SORT_FILE_NAME)
+        if (!file.exists()) return null
+        return runCatching {
+            val parts = file.readText().trim().split('\t')
+            FolderSort(
+                mode = StickerSortMode.fromName(parts.getOrNull(0)),
+                reverse = parts.getOrNull(1) == "true"
+            )
+        }.getOrNull()
+    }
+
+    private fun writeSortFile(dir: File, sort: FolderSort?) {
+        runCatching {
+            val file = File(dir, SORT_FILE_NAME)
+            if (sort == null) file.delete()
+            else file.writeText("${sort.mode.name}\t${sort.reverse}")
+        }
+    }
+
+    /** 读取文件夹的持久排序设置；未设置过返回 null（默认序） */
+    suspend fun getFolderSort(context: Context, folder: String): FolderSort? =
+        withContext(Dispatchers.IO) {
+            File(getRootDir(context), folder).takeIf { it.isDirectory }?.let { readSortFile(it) }
+        }
+
+    suspend fun setFolderSort(context: Context, folder: String, sort: FolderSort?): Boolean =
+        withContext(Dispatchers.IO) {
+            val dir = File(getRootDir(context), folder)
+            if (!dir.isDirectory) return@withContext false
+            writeSortFile(dir, sort)
+            true
+        }
+
+    // ================================ 使用次数文件（每文件夹） ================================
+
+    private fun readUsageMap(dir: File): Map<String, Int> {
+        val file = File(dir, USAGE_FILE_NAME)
+        if (!file.exists()) return emptyMap()
+        val map = LinkedHashMap<String, Int>()
+        runCatching {
+            file.readLines().forEach { line ->
+                val idx = line.lastIndexOf('\t')
+                if (idx > 0) {
+                    val count = line.substring(idx + 1).toIntOrNull() ?: return@forEach
+                    if (count > 0) map[line.substring(0, idx)] = count
+                }
+            }
+        }
+        return map
+    }
+
+    private fun writeUsageMap(dir: File, map: Map<String, Int>) {
+        runCatching {
+            val file = File(dir, USAGE_FILE_NAME)
+            if (map.isEmpty()) file.delete()
+            else file.writeText(map.entries.joinToString("\n") { (n, c) -> "$n\t$c" })
+        }
+    }
+
+    /** 发送成功后累计使用次数（记录在图片所在文件夹的 `.emoo_usage` 内） */
+    suspend fun incrementUsage(path: String) = withContext(Dispatchers.IO) {
+        val file = File(path)
+        val dir = file.parentFile ?: return@withContext
+        val map = LinkedHashMap(readUsageMap(dir))
+        map[file.name] = (map[file.name] ?: 0) + 1
+        writeUsageMap(dir, map)
+    }
+
+    private fun removeUsageEntry(dir: File, name: String) {
+        val map = readUsageMap(dir)
+        if (!map.containsKey(name)) return
+        writeUsageMap(dir, map - name)
+    }
+
+    private fun renameUsageEntry(dir: File, oldName: String, newName: String) {
+        val count = readUsageMap(dir)[oldName] ?: return
+        runCatching {
+            val map = LinkedHashMap(readUsageMap(dir))
+            map.remove(oldName)
+            map[newName] = count
+            writeUsageMap(dir, map)
+        }
+    }
+
+    /** 汇总全部文件夹的使用次数：绝对路径 -> 次数（网格角标显示用） */
+    suspend fun loadUsageCounts(context: Context): Map<String, Int> = withContext(Dispatchers.IO) {
+        val result = HashMap<String, Int>()
+        try {
+            getRootDir(context).listFiles { file -> file.isDirectory }?.forEach { dir ->
+                readUsageMap(dir).forEach { (name, count) ->
+                    result[File(dir, name).absolutePath] = count
+                }
+            }
+        } catch (_: Exception) {
+        }
+        result
+    }
+
+    // ================================ 预览图文件（每文件夹） ================================
+
+    private fun readPreviewName(dir: File): String? {
+        val file = File(dir, PREVIEW_FILE_NAME)
+        if (!file.exists()) return null
+        return runCatching {
+            file.readLines().firstOrNull { it.isNotEmpty() }?.takeIf { name ->
+                File(dir, name).isFile
+            }
+        }.getOrNull()
+    }
+
+    private fun writePreviewName(dir: File, name: String?) {
+        runCatching {
+            val file = File(dir, PREVIEW_FILE_NAME)
+            if (name == null) file.delete() else file.writeText(name)
+        }
+    }
+
+    /** 设置文件夹预览图（记文件名；null 清除） */
+    suspend fun setFolderPreview(context: Context, folder: String, imageName: String?): Boolean =
+        withContext(Dispatchers.IO) {
+            val dir = File(getRootDir(context), folder)
+            if (!dir.isDirectory) return@withContext false
+            writePreviewName(dir, imageName)
+            true
+        }
+
+    /** 汇总全部文件夹的预览图：文件夹名 -> 预览图 uriString（侧栏加载用） */
+    suspend fun loadFolderPreviews(context: Context): Map<String, String> =
+        withContext(Dispatchers.IO) {
+            val result = LinkedHashMap<String, String>()
+            try {
+                getRootDir(context).listFiles { file -> file.isDirectory }?.forEach { dir ->
+                    readPreviewName(dir)?.let { name ->
+                        result[dir.name] = Uri.fromFile(File(dir, name)).toString()
+                    }
+                }
+            } catch (_: Exception) {
+            }
+            result
+        }
+
+    // ================================ 文件夹顺序文件（根目录） ================================
+
+    private fun readFolderOrderFile(root: File): List<String> {
+        val file = File(root, FOLDER_ORDER_FILE_NAME)
+        if (!file.exists()) return emptyList()
+        return runCatching { file.readLines().filter { it.isNotEmpty() } }.getOrDefault(emptyList())
+    }
+
+    private fun writeFolderOrderFile(root: File, order: List<String>) {
+        runCatching {
+            val file = File(root, FOLDER_ORDER_FILE_NAME)
+            if (order.isEmpty()) file.delete()
+            else file.writeText(order.joinToString("\n"))
+        }
+    }
+
+    /** 用户自定义的文件夹顺序（仅包含仍存在的文件夹由调用方过滤） */
+    suspend fun getFolderOrder(context: Context): List<String> = withContext(Dispatchers.IO) {
+        readFolderOrderFile(getRootDir(context))
+    }
+
+    suspend fun setFolderOrder(context: Context, order: List<String>) =
+        withContext(Dispatchers.IO) {
+            val root = getRootDir(context)
+            root.mkdirs()
+            writeFolderOrderFile(root, order)
+        }
+
+    // ================================ 旧 SharedPreferences 数据迁移 ================================
+
+    /** 旧 sp 中的文件夹级元数据（迁移一次后即清除） */
+    data class LegacyFolderMeta(
+        val sorts: Map<String, FolderSort>,
+        val previews: Map<String, String>,
+        val usage: Map<String, Int>,
+        val order: List<String>
+    ) {
+        fun isEmpty() = sorts.isEmpty() && previews.isEmpty() && usage.isEmpty() && order.isEmpty()
+    }
+
+    /**
+     * 把旧版存在 SharedPreferences 里的排序/预览/使用次数/文件夹顺序
+     * 一次性迁移为目录内文件（文件夹已不存在的数据自然丢弃）。
+     */
+    suspend fun migrateLegacyMeta(context: Context, legacy: LegacyFolderMeta) =
+        withContext(Dispatchers.IO) {
+            if (legacy.isEmpty()) return@withContext
+            val root = getRootDir(context)
+            legacy.sorts.forEach { (folder, sort) ->
+                File(root, folder).takeIf { it.isDirectory }?.let { writeSortFile(it, sort) }
+            }
+            legacy.previews.forEach { (folder, path) ->
+                File(root, folder).takeIf { it.isDirectory }?.let {
+                    writePreviewName(it, File(path).name)
+                }
+            }
+            legacy.usage.entries
+                .groupBy({ File(it.key).parentFile }, { File(it.key).name to it.value })
+                .forEach { (dir, entries) ->
+                    if (dir == null || !dir.isDirectory) return@forEach
+                    val map = LinkedHashMap(readUsageMap(dir))
+                    entries.forEach { (name, count) -> if (count > 0) map[name] = count }
+                    writeUsageMap(dir, map)
+                }
+            if (legacy.order.isNotEmpty()) {
+                root.mkdirs()
+                writeFolderOrderFile(root, legacy.order)
+            }
+        }
 
     // ================================ 时间记录文件 ================================
 
@@ -474,7 +700,8 @@ object ImageRepository {
             }
         }
 
-    /** 删除文件夹及其内部全部图片，返回删除的文件数 */
+    /** 删除文件夹及其内部全部图片（排序/计数/预览等元数据文件随目录一并删除），
+     * 返回删除的文件数；顺带从根目录的文件夹顺序文件中移除该文件夹 */
     suspend fun deleteFolder(context: Context, folder: String): Int =
         withContext(Dispatchers.IO) {
             val dir = File(getRootDir(context), folder)
@@ -484,6 +711,9 @@ object ImageRepository {
                     if (file.isFile && file.delete()) deleted++
                 }
                 dir.delete()
+                val root = getRootDir(context)
+                val order = readFolderOrderFile(root)
+                if (folder in order) writeFolderOrderFile(root, order - folder)
             } catch (_: Exception) {
             }
             deleted
@@ -500,6 +730,8 @@ object ImageRepository {
                         removeSeqEntry(dir, file.name)
                         removeCustomEntry(dir, file.name)
                         removeTimeEntry(dir, file.name)
+                        removeUsageEntry(dir, file.name)
+                        if (readPreviewName(dir) == file.name) writePreviewName(dir, null)
                         val map = readHashMap(dir)
                         val key = map.entries.firstOrNull { it.value == file.name }?.key
                         if (key != null) {
@@ -538,6 +770,8 @@ object ImageRepository {
                 renameSeqEntry(dir, old.name, name)
                 renameCustomEntry(dir, old.name, name)
                 renameTimeEntry(dir, old.name, name)
+                renameUsageEntry(dir, old.name, name)
+                if (readPreviewName(dir) == old.name) writePreviewName(dir, name)
                 val map = readHashMap(dir)
                 val key = map.entries.firstOrNull { it.value == old.name }?.key
                     ?: finalFile.sha256Hex()

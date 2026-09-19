@@ -10,18 +10,16 @@ import com.example.emoo.model.FolderSort
 import com.example.emoo.model.ImageItem
 import com.example.emoo.model.RecentEntry
 import com.example.emoo.model.StickerSortMode
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
-import java.io.File
 
 /**
  * 图片主页面 ViewModel：持有文件夹列表、当前选中文件夹（null = “最近”）
- * 与该视图下的图片列表。所有文件操作均委托 Repository，元数据走 MetaPreferences。
+ * 与该视图下的图片列表。所有文件操作与文件夹级元数据（排序/计数/预览/顺序，
+ * 目录内 .emoo_* 文件）均委托 Repository，MetaPreferences 只承载全局设置。
  */
 class GalleryViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -77,9 +75,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val token = ++refreshToken
         viewModelScope.launch {
             _state.update { it.copy(loading = true) }
+            // 旧版 sp 里的文件夹级元数据一次性迁移为目录内 .emoo_* 文件（无旧数据时立即返回）
+            meta.takeLegacyFolderMeta()?.let { legacy ->
+                ImageRepository.migrateLegacyMeta(context, legacy)
+            }
             val folders = orderedFolders(ImageRepository.listFolders(context))
             val selected = _state.value.selectedFolder?.takeIf { it in folders }
-            val sort = selected?.let { resolveSort(it) }
+            val sort = selected?.let { ImageRepository.getFolderSort(context, it) }
             val images = if (_state.value.searchActive) {
                 val base = ImageRepository.listImages(context, null)
                 searchBase = base
@@ -92,13 +94,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 ImageRepository.listImages(
                     context, selected,
                     sortMode = sort?.mode ?: StickerSortMode.DEFAULT,
-                    reverse = sort?.reverse ?: false,
-                    usageCounts = meta.getUsageCounts()
+                    reverse = sort?.reverse ?: false
                 )
             }
-            val previews = meta.getFolderPreviews()
-                .filterKeys { it in folders }
-                .mapValues { it.value.second }
+            val previews = ImageRepository.loadFolderPreviews(context)
+            val usage = ImageRepository.loadUsageCounts(context)
             // 期间又发起了新的刷新/切换时，丢弃本次过期结果
             if (token != refreshToken) return@launch
             _state.update {
@@ -110,20 +110,19 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     gridColumns = meta.getGridColumns(),
                     folderSort = sort,
                     showUsageCount = meta.getShowUsageCount(),
-                    usageCounts = meta.getUsageCounts(),
+                    usageCounts = usage,
                     loading = false
                 )
             }
         }
     }
 
-    /** 解析文件夹生效排序（未设置过即默认序） */
-    private fun resolveSort(folder: String): FolderSort? = meta.getFolderSorts()[folder]
-
-    /** 保存文件夹的排序设置（弹窗「确认」：按所选方式排序） */
+    /** 保存文件夹的排序设置（弹窗「确认」：按所选方式排序，写入文件夹内 .emoo_sort） */
     fun setFolderSort(folder: String, sort: FolderSort) {
-        meta.setFolderSort(folder, sort)
-        if (_state.value.selectedFolder == folder) refresh()
+        viewModelScope.launch {
+            ImageRepository.setFolderSort(context, folder, sort)
+            if (_state.value.selectedFolder == folder) refresh()
+        }
     }
 
     /**
@@ -133,11 +132,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun overwriteCustomSort(folder: String, sort: FolderSort, onResult: (Boolean) -> Unit) {
         val items = _state.value.images
         viewModelScope.launch {
-            val ok = withContext(Dispatchers.IO) {
-                ImageRepository.overwriteCustomOrder(
-                    context, folder, items, sort.mode, sort.reverse, meta.getUsageCounts()
-                )
-            }
+            val ok = ImageRepository.overwriteCustomOrder(
+                context, folder, items, sort.mode, sort.reverse
+            )
             if (ok) setFolderSort(folder, FolderSort(StickerSortMode.DEFAULT, false))
             onResult(ok)
         }
@@ -244,13 +241,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /** 应用用户自定义排序：已排序的在前（保持保存顺序），新文件夹按字母序追加在后 */
-    private fun orderedFolders(alphabetical: List<String>): List<String> {
-        val order = meta.getFolderOrder()
+    private suspend fun orderedFolders(alphabetical: List<String>): List<String> {
+        val order = ImageRepository.getFolderOrder(context)
         if (order.isEmpty()) return alphabetical
         return order.filter { it in alphabetical } + alphabetical.filter { it !in order }
     }
 
-    /** 上移/下移文件夹并持久化自定义顺序（“最近”为特殊入口，不在 folders 内、不可移动） */
+    /** 上移/下移文件夹并持久化自定义顺序到根目录顺序文件（“最近”为特殊入口，不在 folders 内、不可移动） */
     fun moveFolder(folder: String, up: Boolean) {
         val current = _state.value.folders.toMutableList()
         val index = current.indexOf(folder)
@@ -259,17 +256,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         if (target !in current.indices) return
         current.removeAt(index)
         current.add(target, folder)
-        meta.setFolderOrder(current)
         _state.update { it.copy(folders = current) }
+        viewModelScope.launch { ImageRepository.setFolderOrder(context, current) }
     }
 
-    /** 发送成功后记入“最近”并累计使用次数（供 USAGE 排序） */
+    /** 发送成功后记入“最近”并累计使用次数（写入所在文件夹的 .emoo_usage，供 USAGE 排序） */
     fun recordSentImage(image: ImageItem) {
-        meta.incrementUsage(image.path)
         meta.addToRecent(
             listOf(RecentEntry(image.path, image.displayName, image.folderName, System.currentTimeMillis()))
         )
-        if (_state.value.selectedFolder == null) refresh()
+        viewModelScope.launch {
+            ImageRepository.incrementUsage(image.path)
+            if (_state.value.selectedFolder == null) refresh()
+            else _state.update { it.copy(usageCounts = ImageRepository.loadUsageCounts(context)) }
+        }
     }
 
     /** 统计某文件夹内图片数量（删除确认弹窗文案用） */
@@ -297,8 +297,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /** 网格角标显示使用次数的开关 */
     fun setShowUsageCount(show: Boolean) {
         meta.setShowUsageCount(show)
-        _state.update {
-            it.copy(showUsageCount = show, usageCounts = if (show) meta.getUsageCounts() else it.usageCounts)
+        _state.update { it.copy(showUsageCount = show) }
+        if (show) {
+            viewModelScope.launch {
+                val counts = ImageRepository.loadUsageCounts(context)
+                _state.update { it.copy(usageCounts = counts) }
+            }
         }
     }
 
@@ -315,15 +319,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    /** 长按图片 -> 设为所在文件夹的预览图（持久化到 MetaPreferences） */
+    /** 长按图片 -> 设为所在文件夹的预览图（记文件名到文件夹内 .emoo_preview） */
     fun setFolderPreview(image: ImageItem) {
-        meta.setFolderPreview(image.folderName, image.path, image.uriString)
         _state.update { it.copy(previewMap = it.previewMap + (image.folderName to image.uriString)) }
+        viewModelScope.launch {
+            ImageRepository.setFolderPreview(context, image.folderName, image.displayName)
+        }
     }
 
     /**
-     * 长按图片 -> 重命名。文件改名与 sha256 映射文件由 Repository 同步更新，
-     * 这里顺带修正“最近”记录与文件夹预览图中指向旧路径的条目。
+     * 长按图片 -> 重命名。文件改名与 sha256 映射、使用次数、预览图等
+     * 文件夹内元数据文件均由 Repository 同步更新，这里只修正“最近”记录。
      */
     fun renameImage(image: ImageItem, newName: String, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
@@ -339,10 +345,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         }
                     })
                 }
-                if (meta.getFolderPreviews()[image.folderName]?.first == image.path) {
-                    meta.setFolderPreview(image.folderName, renamed.path, renamed.uriString)
-                }
-                meta.transferUsage(image.path, renamed.path)
                 refresh()
             }
             onResult(renamed != null)
@@ -358,31 +360,22 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    /** 真实删除单张图片，并从“最近”移除；若它是文件夹预览图则回退默认图标 */
+    /** 真实删除单张图片，并从“最近”移除；文件夹内计数/预览等记录由 Repository 顺带清理 */
     fun deleteImage(image: ImageItem, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             val ok = ImageRepository.deleteImage(context, image)
             meta.removeFromRecent(listOf(image.path))
-            meta.removeUsage(listOf(image.path))
-            if (meta.getFolderPreviews()[image.folderName]?.first == image.path) {
-                meta.setFolderPreview(image.folderName, null, null)
-            }
             refresh()
             onResult(ok)
         }
     }
 
-    /** 真实删除文件夹及其全部图片，并清理预览图、排序记录与相关“最近”记录 */
+    /** 真实删除文件夹及其全部图片（文件夹内元数据文件随目录删除，
+     * 根目录顺序文件由 Repository 顺带清理），并清理相关“最近”记录 */
     fun deleteFolder(folder: String, onResult: (Int) -> Unit) {
         viewModelScope.launch {
             val recentPaths = meta.getRecent().filter { it.folder == folder }.map { it.path }
-            // 删除前采集文件路径，用于清理各自的使用计数
-            val paths = File(ImageRepository.getRootDir(context), folder)
-                .listFiles()?.map { it.absolutePath } ?: emptyList()
             val deleted = ImageRepository.deleteFolder(context, folder)
-            meta.setFolderPreview(folder, null, null)
-            meta.setFolderOrder(meta.getFolderOrder() - folder)
-            meta.cleanupFolderMeta(folder, paths + recentPaths)
             meta.removeFromRecent(recentPaths)
             refresh()
             onResult(deleted)

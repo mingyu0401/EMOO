@@ -12,8 +12,10 @@ import org.json.JSONObject
 
 /**
  * 轻量元数据存储（SharedPreferences + org.json）。
- * “目录即数据”：图片归属完全由磁盘目录决定，这里只保存
- * 最近列表 / 文件夹预览图映射 / 每行列数 / 主题模式四项辅助信息。
+ * “目录即数据”：图片归属与文件夹级元数据（排序设置、使用次数、预览图、
+ * 文件夹顺序）全部由磁盘目录内的 .emoo_* 文件承载（见 ImageRepository），
+ * 这里只保存 最近列表 / 每行列数 / 主题模式 / 角标开关 / 发送方式 等全局设置，
+ * 以及旧版本文件夹级数据的一次性迁移出口 [takeLegacyFolderMeta]。
  */
 class MetaPreferences private constructor(context: Context) {
 
@@ -79,35 +81,6 @@ class MetaPreferences private constructor(context: Context) {
 
     fun restoreRecent(entries: List<RecentEntry>) = saveRecent(entries)
 
-    // ---------------- 文件夹预览图（文件夹名 -> path/uri） ----------------
-
-    /** 返回 folderName -> (previewPath, previewUriString) */
-    fun getFolderPreviews(): Map<String, Pair<String, String>> {
-        val raw = sp.getString(KEY_PREVIEWS, null) ?: return emptyMap()
-        return try {
-            val obj = JSONObject(raw)
-            obj.keys().asSequence().associateWith { key ->
-                val v = obj.getJSONObject(key)
-                v.optString("path") to v.optString("uri")
-            }
-        } catch (_: Exception) {
-            emptyMap()
-        }
-    }
-
-    fun setFolderPreview(folder: String, path: String?, uri: String?) {
-        val map = getFolderPreviews().toMutableMap()
-        if (path == null || uri == null) map.remove(folder) else map[folder] = path to uri
-        val obj = JSONObject()
-        map.forEach { (f, pair) ->
-            obj.put(f, JSONObject().apply {
-                put("path", pair.first)
-                put("uri", pair.second)
-            })
-        }
-        sp.edit().putString(KEY_PREVIEWS, obj.toString()).apply()
-    }
-
     // ---------------- 设置项 ----------------
 
     fun getGridColumns(): Int = sp.getInt(KEY_GRID_COLUMNS, 4).coerceIn(2, 6)
@@ -129,30 +102,37 @@ class MetaPreferences private constructor(context: Context) {
         sp.edit().putBoolean(KEY_SHOW_USAGE, show).apply()
     }
 
-    // ---------------- 文件夹自定义排序 ----------------
+    // ---------------- 旧版文件夹级元数据（仅迁移用） ----------------
 
-    /** 返回用户自定义的文件夹顺序（仅包含仍存在的文件夹由调用方过滤） */
-    fun getFolderOrder(): List<String> {
-        val raw = sp.getString(KEY_FOLDER_ORDER, null) ?: return emptyList()
-        return try {
-            val arr = JSONArray(raw)
+    /**
+     * 取出旧版本存在 sp 里的文件夹级元数据（预览图/顺序/排序/使用次数）
+     * 并清除对应键。四项均为空时返回 null，表示无需迁移。
+     * 迁移落盘由 [ImageRepository.migrateLegacyMeta] 完成。
+     */
+    fun takeLegacyFolderMeta(): ImageRepository.LegacyFolderMeta? {
+        val hasAny = LEGACY_KEYS.any { sp.contains(it) }
+        if (!hasAny) return null
+
+        // 预览图：folder -> path
+        val previews = try {
+            val obj = JSONObject(sp.getString(KEY_PREVIEWS, null) ?: "{}")
+            obj.keys().asSequence().associateWith { obj.getJSONObject(it).optString("path") }
+                .filterValues { it.isNotEmpty() }
+        } catch (_: Exception) {
+            emptyMap()
+        }
+
+        // 文件夹顺序
+        val order = try {
+            val arr = JSONArray(sp.getString(KEY_FOLDER_ORDER, null) ?: "[]")
             List(arr.length()) { arr.optString(it) }.filter { it.isNotEmpty() }
         } catch (_: Exception) {
             emptyList()
         }
-    }
 
-    fun setFolderOrder(folders: List<String>) {
-        sp.edit().putString(KEY_FOLDER_ORDER, JSONArray(folders).toString()).apply()
-    }
-
-    // ---------------- 文件夹内表情包排序（持久默认设置） ----------------
-
-    /** 文件夹名 -> 排序设置；未设置过的文件夹不在映射内 */
-    fun getFolderSorts(): Map<String, FolderSort> {
-        val raw = sp.getString(KEY_FOLDER_SORTS, null) ?: return emptyMap()
-        return try {
-            val obj = JSONObject(raw)
+        // 每文件夹排序设置
+        val sorts = try {
+            val obj = JSONObject(sp.getString(KEY_FOLDER_SORTS, null) ?: "{}")
             obj.keys().asSequence().mapNotNull { key ->
                 val v = obj.optJSONObject(key) ?: return@mapNotNull null
                 key to FolderSort(
@@ -163,30 +143,10 @@ class MetaPreferences private constructor(context: Context) {
         } catch (_: Exception) {
             emptyMap()
         }
-    }
 
-    fun setFolderSort(folder: String, sort: FolderSort) {
-        val obj = readJsonOrNull(KEY_FOLDER_SORTS)
-        obj.put(folder, JSONObject().apply {
-            put("mode", sort.mode.name)
-            put("reverse", sort.reverse)
-        })
-        sp.edit().putString(KEY_FOLDER_SORTS, obj.toString()).apply()
-    }
-
-    fun removeFolderSort(folder: String) {
-        val obj = readJsonOrNull(KEY_FOLDER_SORTS)
-        if (!obj.has(folder)) return
-        obj.remove(folder)
-        sp.edit().putString(KEY_FOLDER_SORTS, obj.toString()).apply()
-    }
-
-    // ---------------- 表情包使用次数（path -> 次数） ----------------
-
-    fun getUsageCounts(): Map<String, Int> {
-        val raw = sp.getString(KEY_USAGE_COUNTS, null) ?: return emptyMap()
-        return try {
-            val obj = JSONObject(raw)
+        // 使用次数：path -> count
+        val usage = try {
+            val obj = JSONObject(sp.getString(KEY_USAGE_COUNTS, null) ?: "{}")
             obj.keys().asSequence().mapNotNull { key ->
                 val v = obj.optInt(key, -1)
                 if (v > 0) key to v else null
@@ -194,44 +154,14 @@ class MetaPreferences private constructor(context: Context) {
         } catch (_: Exception) {
             emptyMap()
         }
-    }
 
-    fun incrementUsage(path: String) {
-        val obj = readJsonOrNull(KEY_USAGE_COUNTS)
-        obj.put(path, obj.optInt(path, 0) + 1)
-        sp.edit().putString(KEY_USAGE_COUNTS, obj.toString()).apply()
-    }
+        sp.edit().apply {
+            LEGACY_KEYS.forEach { remove(it) }
+        }.apply()
 
-    /** 文件改名后把计数转移到新路径 */
-    fun transferUsage(oldPath: String, newPath: String) {
-        val obj = readJsonOrNull(KEY_USAGE_COUNTS)
-        if (!obj.has(oldPath)) return
-        obj.put(newPath, obj.optInt(newPath, 0) + obj.optInt(oldPath, 0))
-        obj.remove(oldPath)
-        sp.edit().putString(KEY_USAGE_COUNTS, obj.toString()).apply()
+        val legacy = ImageRepository.LegacyFolderMeta(sorts, previews, usage, order)
+        return if (legacy.isEmpty()) null else legacy
     }
-
-    fun removeUsage(paths: Collection<String>) {
-        if (paths.isEmpty()) return
-        val obj = readJsonOrNull(KEY_USAGE_COUNTS)
-        if (paths.any { obj.has(it) }) {
-            paths.forEach { obj.remove(it) }
-            sp.edit().putString(KEY_USAGE_COUNTS, obj.toString()).apply()
-        }
-    }
-
-    /** 删除文件夹时清理其排序默认设置与其中所有文件的使用计数 */
-    fun cleanupFolderMeta(folder: String, paths: Collection<String>) {
-        removeFolderSort(folder)
-        removeUsage(paths)
-    }
-
-    private fun readJsonOrNull(key: String): JSONObject =
-        try {
-            JSONObject(sp.getString(key, null) ?: "{}")
-        } catch (_: Exception) {
-            JSONObject()
-        }
 
     // ---------------- 发送方式（Shizuku / 无障碍） ----------------
 
@@ -269,15 +199,18 @@ class MetaPreferences private constructor(context: Context) {
         const val MAX_RECENT = 100
 
         private const val KEY_RECENT = "recent_json"
-        private const val KEY_PREVIEWS = "folder_previews_json"
         private const val KEY_GRID_COLUMNS = "grid_columns"
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_SHOW_USAGE = "show_usage_count"
+        private const val KEY_SEND_MODE = "send_mode"
+        private const val KEY_QQ_SEND_MODE = "qq_send_mode"
+
+        // 旧版文件夹级元数据键（已迁移为目录内 .emoo_* 文件，仅迁移时读取并清除）
+        private const val KEY_PREVIEWS = "folder_previews_json"
         private const val KEY_FOLDER_ORDER = "folder_order_json"
         private const val KEY_FOLDER_SORTS = "folder_sorts_json"
         private const val KEY_USAGE_COUNTS = "usage_counts_json"
-        private const val KEY_SEND_MODE = "send_mode"
-        private const val KEY_QQ_SEND_MODE = "qq_send_mode"
+        private val LEGACY_KEYS = listOf(KEY_PREVIEWS, KEY_FOLDER_ORDER, KEY_FOLDER_SORTS, KEY_USAGE_COUNTS)
 
         @Volatile
         private var instance: MetaPreferences? = null
