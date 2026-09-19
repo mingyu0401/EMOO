@@ -8,9 +8,25 @@ object DragSessionState {
     @Volatile
     private var started = false
 
+    @Volatile
+    private var autoPending = false
+
     /** 新一轮模拟拖拽前重置 */
     fun reset() {
         started = false
+        autoPending = false
+    }
+
+    /** 模拟拖拽注入前置标记：本轮拖拽源由注入事件触发，虚影用透明图 */
+    fun markAutoPending() {
+        autoPending = true
+    }
+
+    /** 拖拽源 onDragStart 消费标记：返回 true 表示本轮是模拟拖拽 */
+    fun consumeAutoDrag(): Boolean {
+        val v = autoPending
+        autoPending = false
+        return v
     }
 
     /** 拖拽源 onDragStart（startDragAndDrop 已发起）时标记 */

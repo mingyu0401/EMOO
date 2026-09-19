@@ -187,16 +187,25 @@ object ShizukuSender {
         )
 
         DragSessionState.reset()
+        DragSessionState.markAutoPending()
         val injected = ShizukuDragInjector.dragAndDrop(
             targets.fromX, targets.fromY, targets.toX, targets.toY, 500L
         ) || ShizukuDragInjector.dragAndDropManual(
             targets.fromX, targets.fromY, targets.toX, targets.toY
         )
-        if (!injected) return@withContext SendResult.FAILED
+        if (!injected) {
+            DragSessionState.consumeAutoDrag()
+            return@withContext SendResult.FAILED
+        }
 
         // 等 QQ 处理 drop；拖拽源从未启动（长按未触发 drag）则报失败
         delay(900)
-        if (DragSessionState.wasStarted()) SendResult.SENT else SendResult.FAILED
+        if (DragSessionState.wasStarted()) {
+            SendResult.SENT
+        } else {
+            DragSessionState.consumeAutoDrag()
+            SendResult.FAILED
+        }
     }
 
     // ============================ 微信：路径粘贴 ============================

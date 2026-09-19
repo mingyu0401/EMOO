@@ -105,6 +105,9 @@ fun ImageGridItem(
                                 // DRAG_FLAG_GLOBAL_URI_READ 授予接收方读取 FileProvider uri 的权限。
                                 // GIF 已在导入时压缩，直接使用磁盘文件发起拖放
                                 DragSessionState.markStarted()
+                                // 模拟拖拽（Shizuku 注入）用透明虚影，避免缩略图横穿屏幕；
+                                // 真手指拖动仍保留缩略图虚影
+                                val autoDrag = DragSessionState.consumeAutoDrag()
                                 val file = File(image.path)
                                 val uri = FileProvider.getUriForFile(
                                     context, ImageRepository.FILE_PROVIDER_AUTHORITY, file
@@ -121,11 +124,15 @@ fun ImageGridItem(
                                 val clip = ClipData(file.name, arrayOf(mime), ClipData.Item(uri))
                                 view.startDragAndDrop(
                                     clip,
-                                    dragThumb?.let { thumb ->
-                                        // 虚像直接画图片本身（约 96dp 方形圆角），不再是整格快照
-                                        val sizePx = with(density) { 96.dp.toPx() }.toInt()
-                                        BitmapDragShadowBuilder(thumb, sizePx)
-                                    } ?: View.DragShadowBuilder(view),
+                                    if (autoDrag) {
+                                        TransparentDragShadowBuilder()
+                                    } else {
+                                        dragThumb?.let { thumb ->
+                                            // 虚像直接画图片本身（约 96dp 方形圆角），不再是整格快照
+                                            val sizePx = with(density) { 96.dp.toPx() }.toInt()
+                                            BitmapDragShadowBuilder(thumb, sizePx)
+                                        } ?: View.DragShadowBuilder(view)
+                                    },
                                     null,
                                     View.DRAG_FLAG_GLOBAL or View.DRAG_FLAG_GLOBAL_URI_READ
                                 )
@@ -226,4 +233,18 @@ private class BitmapDragShadowBuilder(
         })
         canvas.drawBitmap(bitmap, src, dst, paint)
     }
+}
+
+/**
+ * 模拟拖拽的透明虚影：只提供 1×1 尺寸且不绘制任何内容，
+ * 系统拖放会话照常进行，但屏幕上看不到跟随的缩略图。
+ */
+private class TransparentDragShadowBuilder : View.DragShadowBuilder() {
+
+    override fun onProvideShadowMetrics(outShadowSize: Point, outShadowTouchPoint: Point) {
+        outShadowSize.set(1, 1)
+        outShadowTouchPoint.set(0, 0)
+    }
+
+    override fun onDrawShadow(canvas: Canvas) = Unit
 }
