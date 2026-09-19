@@ -80,7 +80,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val images = if (_state.value.searchActive) {
                 val base = ImageRepository.listImages(context, null)
                 searchBase = base
-                applyQuery(base, _state.value.searchQuery)
+                // 未输入关键字时保持空白，只展示过滤结果
+                if (_state.value.searchQuery.isBlank()) emptyList()
+                else applyQuery(base, _state.value.searchQuery)
             } else if (selected == null) {
                 resolveRecentImages()
             } else {
@@ -128,13 +130,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         if (tempSorts.remove(folder) != null && _state.value.selectedFolder == folder) refresh()
     }
 
-    /** 进入搜索态：全库图片为范围，按文件名过滤 */
+    /** 进入搜索态：扫全库备用，但列表初始为空白，输入关键字后展示过滤结果 */
     fun enterSearch() {
         viewModelScope.launch {
             val base = ImageRepository.listImages(context, null)
             searchBase = base
             _state.update {
-                it.copy(searchActive = true, searchQuery = "", images = base, loading = false)
+                it.copy(searchActive = true, searchQuery = "", images = emptyList(), loading = false)
             }
         }
     }
@@ -145,9 +147,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         refresh()
     }
 
-    /** 更新搜索关键字（内存过滤，不扫盘） */
+    /** 更新搜索关键字（内存过滤，不扫盘）；清空关键字时回到空白初始态 */
     fun setSearchQuery(query: String) {
-        _state.update { it.copy(searchQuery = query, images = applyQuery(searchBase, query)) }
+        _state.update {
+            it.copy(
+                searchQuery = query,
+                images = if (query.isBlank()) emptyList() else applyQuery(searchBase, query)
+            )
+        }
     }
 
     private fun applyQuery(base: List<ImageItem>, query: String): List<ImageItem> =

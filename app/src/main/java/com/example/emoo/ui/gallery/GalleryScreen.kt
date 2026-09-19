@@ -273,6 +273,8 @@ fun GalleryScreen(
                     // 空状态引导
                     if (!state.loading && state.images.isEmpty()) {
                         val hint = when {
+                            state.searchActive && state.searchQuery.isBlank() ->
+                                "输入文件名关键字开始搜索"
                             state.searchActive && state.searchQuery.isNotBlank() ->
                                 "没有文件名包含「${state.searchQuery}」的图片"
                             state.folders.isEmpty() -> "还没有文件夹\n点击右下角 + 创建你的第一个文件夹"
