@@ -24,7 +24,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _gridColumns = MutableStateFlow(meta.getGridColumns())
     val gridColumns: StateFlow<Int> = _gridColumns.asStateFlow()
 
-    /** 一键发送实现通道（Shizuku 推荐 / 无障碍），QQ 与微信共用 */
+    /** 一键发送实现通道（Shizuku 推荐 / 无障碍 / 普通），QQ 与微信共用 */
     private val _sendMode = MutableStateFlow(meta.getSendMode())
     val sendMode: StateFlow<SendMode> = _sendMode.asStateFlow()
 

@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FolderShared
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material3.AlertDialog
@@ -63,6 +64,7 @@ import com.example.emoo.model.SendMode
 import com.example.emoo.model.ThemeMode
 import com.example.emoo.send.ShizukuDragInjector
 import com.example.emoo.service.PasteAccessibilityService
+import com.example.emoo.ui.ModeTutorialDialog
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.system.exitProcess
@@ -83,6 +85,13 @@ fun SettingsScreen(settingsViewModel: SettingsViewModel) {
     val context = LocalContext.current
     var showClearRecentConfirm by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
+    var showTutorial by remember { mutableStateOf(false) }
+    // 真实版本号随构建自动更新（0.93 起不再硬编码在设置页）
+    val versionName = remember {
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull() ?: "0.93"
+    }
 
     // 版本号彩蛋状态
     var versionClicks by remember { mutableIntStateOf(0) }
@@ -174,14 +183,15 @@ fun SettingsScreen(settingsViewModel: SettingsViewModel) {
                 }
             )
 
-            // 发送方式：影响 QQ 与微信两条发送链路
+            // 发送方式：影响 QQ 与微信两条发送链路（Shizuku / 无障碍 / 普通）
             ListItem(
                 headlineContent = { Text("发送方式") },
                 supportingContent = {
                     Text(
-                        "推荐 Shizuku：QQ 拖拽与微信路径识别全部经 shell 指令注入实现，" +
+                        "推荐 Shizuku：QQ 拖拽与微信发送全部经 shell 指令注入实现，" +
                             "不触碰无障碍，不会触发系统频繁弹窗（需安装并启动 Shizuku 且授权本应用）。" +
-                            "无障碍方式无需额外应用，但 ColorOS 16 可能频繁弹窗提醒。"
+                            "无障碍方式无需额外应用，但 ColorOS 16 可能频繁弹窗提醒。" +
+                            "普通模式不需要任何权限：小窗短按图片复制其地址（微信粘贴发送），长按图片直接拖拽（QQ）。"
                     )
                 },
                 leadingContent = { Icon(Icons.Filled.SwapHoriz, contentDescription = null) }
@@ -215,6 +225,11 @@ fun SettingsScreen(settingsViewModel: SettingsViewModel) {
                         }
                     },
                     label = { Text("无障碍") }
+                )
+                FilterChip(
+                    selected = sendMode == SendMode.NORMAL,
+                    onClick = { settingsViewModel.setSendMode(SendMode.NORMAL) },
+                    label = { Text("普通") }
                 )
             }
             // Shizuku 连接/授权状态（从授权弹窗返回时刷新）
@@ -308,6 +323,14 @@ fun SettingsScreen(settingsViewModel: SettingsViewModel) {
                 )
             }
 
+            // 再次查看欢迎/教程弹窗（与首次启动时一致，三种发送方式说明）
+            ListItem(
+                headlineContent = { Text("点我再次查看教程") },
+                supportingContent = { Text("重新查看小窗使用与三种发送方式说明，可切换发送方式") },
+                leadingContent = { Icon(Icons.Filled.School, contentDescription = null) },
+                modifier = Modifier.clickable { showTutorial = true }
+            )
+
             // 关于
             ListItem(
                 headlineContent = { Text("关于") },
@@ -319,7 +342,7 @@ fun SettingsScreen(settingsViewModel: SettingsViewModel) {
             // 版本号：连点彩蛋（第 4~10 次点击提示剩余次数，第 10 次触发 boom）
             ListItem(
                 headlineContent = { Text("版本") },
-                supportingContent = { Text("1.0.0") },
+                supportingContent = { Text(versionName) },
                 modifier = Modifier.clickable {
                     versionClicks++
                     if (versionClicks in 4..10) {
@@ -379,13 +402,23 @@ fun SettingsScreen(settingsViewModel: SettingsViewModel) {
                     "EMOO 是一款以真实文件系统目录结构为基础的图片分类浏览工具。\n\n" +
                         "· 分类 = 图片根目录下的真实子目录\n" +
                         "· 支持 jpg / jpeg / png / gif（GIF 实时循环播放）\n" +
-                        "· 小窗中点击图片可一键发送到 QQ/微信\n" +
-                        "· 图片导入为复制，不改动原文件"
+                        "· 小窗中点击图片可一键发送到 QQ/微信（Shizuku / 无障碍 / 普通 三种方式）\n" +
+                        "· 全屏浏览时右下角分享按钮可系统分享\n" +
+                        "· 图片导入为复制，不改动原文件\n\n" +
+                        "当前版本：$versionName"
                 )
             },
             confirmButton = {
                 TextButton(onClick = { showAbout = false }) { Text("确定") }
             }
+        )
+    }
+
+    // 教程弹窗：与首次启动的欢迎界面一致，选择即切换发送方式
+    if (showTutorial) {
+        ModeTutorialDialog(
+            onDismissRequest = { showTutorial = false },
+            onModePicked = { settingsViewModel.setSendMode(it) }
         )
     }
 

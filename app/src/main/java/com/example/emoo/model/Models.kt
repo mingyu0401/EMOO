@@ -15,10 +15,12 @@ enum class ThemeMode {
 /**
  * 一键发送（QQ 拖拽 + 微信路径识别）的注入通道。
  * SHIZUKU：纯 Shizuku shell 级实现（窗口检测 + 触摸/文本注入），不触碰无障碍；
- * ACCESSIBILITY：无障碍服务实现。
+ * ACCESSIBILITY：无障碍服务实现；
+ * NORMAL：普通模式，不需要任何权限——小窗短按图片复制其公共目录地址
+ * （微信粘贴即发），长按图片发起真手指系统拖拽（拖到 QQ 即发）。
  */
 enum class SendMode {
-    SHIZUKU, ACCESSIBILITY;
+    SHIZUKU, ACCESSIBILITY, NORMAL;
 
     companion object {
         fun fromName(name: String?): SendMode =

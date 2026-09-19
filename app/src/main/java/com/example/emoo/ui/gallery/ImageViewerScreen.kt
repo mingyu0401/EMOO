@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
@@ -24,8 +25,10 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -56,7 +59,10 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.example.emoo.data.ImageRepository
+import com.example.emoo.data.MetaPreferences
 import com.example.emoo.model.ImageItem
+import com.example.emoo.model.SendMode
+import com.example.emoo.send.ImageSender
 import java.io.File
 
 /**
@@ -205,6 +211,23 @@ fun ImageViewerScreen(
                                 Text("用其他应用打开")
                             }
                         }
+                    }
+                    // 全屏浏览：右下角圆形“分享”按钮拉起系统分享；
+                    // Shizuku/无障碍模式下顺带提示小窗发送更方便
+                    FloatingActionButton(
+                        onClick = {
+                            if (MetaPreferences.get(context)
+                                    .getSendMode() != SendMode.NORMAL
+                            ) {
+                                Toast.makeText(context, "小窗更方便哦", Toast.LENGTH_SHORT).show()
+                            }
+                            ImageSender.shareViaSystem(context, image)
+                        },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(16.dp)
+                    ) {
+                        Icon(Icons.Filled.Share, contentDescription = "分享")
                     }
                 }
             }

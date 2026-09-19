@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -88,6 +89,7 @@ import com.example.emoo.model.StickerSortMode
 import com.example.emoo.send.ImageSender
 import com.example.emoo.send.SendResult
 import com.example.emoo.send.ShizukuDragInjector
+import com.example.emoo.ui.ModeTutorialDialog
 import kotlinx.coroutines.launch
 
 /**
@@ -95,9 +97,11 @@ import kotlinx.coroutines.launch
  * 右侧 1/6 为文件夹侧栏。支持长按图片（设为预览图/删除）、长按文件夹（上下排序/删除）、
  * 新建文件夹、ON_RESUME 自动重扫描同步外部改动。
  *
- * 小窗/分屏模式（isInMultiWindowMode）下点击图片不走大图浏览，
- * 而是经无障碍服务一键发送到前台聊天应用：微信走“路径识别+自动点发送”，
- * QQ 走“模拟拖拽到聊天窗直接发送”（图片格子同时作为真手指长按拖拽的源）。
+ * 小窗/分屏模式（isInMultiWindowMode）下点击图片不走大图浏览，按发送方式分流：
+ * Shizuku/无障碍经一键发送通道发到前台聊天应用（微信走 MediaStore 同源拖拽、
+ * QQ 走模拟拖拽；点击视频且前台为微信时提示改走系统分享）；
+ * 普通模式短按图片仅复制其公共目录地址（微信粘贴即发），长按格子由真手指
+ * 发起系统拖拽拖到 QQ（图片格子同时作为拖拽源）。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
@@ -159,6 +163,12 @@ fun GalleryScreen(
             if (result == SendResult.SENT || result == SendResult.ATTACHED) {
                 viewModel.recordSentImage(image)
             }
+            // 微信不支持发视频：toast 提示并直接拉起系统分享（Shizuku/无障碍通道）
+            if (result == SendResult.WECHAT_VIDEO_UNSUPPORTED) {
+                Toast.makeText(context, "微信暂不支持发视频，已拉起分享", Toast.LENGTH_SHORT).show()
+                ImageSender.shareViaSystem(context, image)
+                return@launch
+            }
             val message = when (result) {
                 SendResult.SENT -> "已发送到聊天窗口"
                 SendResult.ATTACHED -> "图片已附到聊天框，请手动点击发送"
@@ -174,10 +184,21 @@ fun GalleryScreen(
                     }
                 }
                 SendResult.NOT_RECOGNIZED -> "微信未能识别图片路径，已取消发送"
-                SendResult.WECHAT_VIDEO_UNSUPPORTED -> "暂不支持发送视频到微信（可拖拽发送到 QQ）"
+                SendResult.WECHAT_VIDEO_UNSUPPORTED -> "" // 上方已处理（toast+分享）
                 SendResult.FAILED -> "发送失败，可重试或手动发送"
             }
             snackbarHostState.showSnackbar(message)
+        }
+    }
+
+    /** 普通模式小窗点击图片：复制其公共目录地址供微信粘贴发送（残留临时文件下次启动清理） */
+    fun copyImagePathForWechat(image: ImageItem) {
+        scope.launch {
+            val staged = ImageSender.stageToDownloads(context, image)
+            clipboard.setPrimaryClip(
+                ClipData.newPlainText("emoo", staged?.second ?: image.path)
+            )
+            Toast.makeText(context, "已复制，微信粘贴发送 QQ长按拖拽", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -247,18 +268,26 @@ fun GalleryScreen(
                                 image = image,
                                 onClick = { center ->
                                     if (inMultiWindow) {
-                                        // 文字：暂不做发送，小窗点击仅复制全文
-                                        if (image.isText) {
-                                            copyTextToClipboard(image)
-                                        } else if (ImageSender.isReady(context)) {
-                                            // 小窗/分屏：一键发送到前台聊天应用
-                                            sendImage(image, center)
-                                        } else if (MetaPreferences.get(context)
-                                                .getSendMode() == SendMode.SHIZUKU
-                                        ) {
-                                            showShizukuGuide = true
-                                        } else {
-                                            showAccessibilityGuide = true
+                                        val mode = MetaPreferences.get(context).getSendMode()
+                                        when {
+                                            // 文字：暂不做发送，小窗点击仅复制全文
+                                            image.isText -> copyTextToClipboard(image)
+                                            // 普通模式无法探测前台应用：视频直接提示并走系统分享
+                                            mode == SendMode.NORMAL && image.isVideo -> {
+                                                Toast.makeText(
+                                                    context,
+                                                    "微信暂不支持发视频，已拉起分享",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                                ImageSender.shareViaSystem(context, image)
+                                            }
+                                            mode == SendMode.NORMAL ->
+                                                copyImagePathForWechat(image)
+                                            ImageSender.isReady(context) ->
+                                                sendImage(image, center)
+                                            mode == SendMode.SHIZUKU ->
+                                                showShizukuGuide = true
+                                            else -> showAccessibilityGuide = true
                                         }
                                     } else if (state.images.isNotEmpty()) {
                                         onOpenImage(index)
@@ -829,37 +858,11 @@ fun GalleryScreen(
         )
     }
 
-    // 首次使用：选择发送方式（推荐 Shizuku），只申请所选定方式的权限
+    // 首次使用（未选择过发送方式）：欢迎/教程弹窗，三种模式均推荐小窗使用
     if (showModeChooser) {
-        AlertDialog(
+        ModeTutorialDialog(
             onDismissRequest = { showModeChooser = false },
-            title = { Text("选择发送方式") },
-            text = {
-                Text(
-                    "小窗中点击图片可一键发送到 QQ/微信，请选择实现方式：\n\n" +
-                        "· Shizuku（推荐）：shell 级注入，不触发系统的无障碍频繁弹窗，需要安装并启动 Shizuku 后授权\n\n" +
-                        "· 无障碍：无需额外应用，但 ColorOS 可能频繁弹窗提醒无障碍使用\n\n" +
-                        "选择后仅申请对应权限，之后可在 设置 中切换。"
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        MetaPreferences.get(context).setSendMode(SendMode.SHIZUKU)
-                        showModeChooser = false
-                        ShizukuDragInjector.requestPermission(context)
-                    }
-                ) { Text("Shizuku（推荐）") }
-            },
-            dismissButton = {
-                Button(
-                    onClick = {
-                        MetaPreferences.get(context).setSendMode(SendMode.ACCESSIBILITY)
-                        showModeChooser = false
-                        showAccessibilityGuide = true
-                    }
-                ) { Text("无障碍") }
-            }
+            onModePicked = { MetaPreferences.get(context).setSendMode(it) }
         )
     }
 }

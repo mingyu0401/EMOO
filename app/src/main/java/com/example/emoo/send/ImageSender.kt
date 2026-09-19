@@ -2,10 +2,12 @@ package com.example.emoo.send
 
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
 import android.view.accessibility.AccessibilityWindowInfo
+import androidx.core.content.FileProvider
 import com.example.emoo.data.ImageRepository
 import com.example.emoo.data.MetaPreferences
 import com.example.emoo.model.ImageItem
@@ -76,11 +78,30 @@ object ImageSender {
 
     /**
      * 当前发送方式是否就绪：Shizuku 模式只看 Shizuku 运行与授权，
-     * 无障碍模式只看无障碍服务开关。
+     * 无障碍模式只看无障碍服务开关，普通模式无需权限恒就绪。
      */
     fun isReady(context: Context): Boolean = when (MetaPreferences.get(context).getSendMode()) {
         SendMode.SHIZUKU -> ShizukuDragInjector.isAvailable()
         SendMode.ACCESSIBILITY -> PasteAccessibilityService.isEnabled()
+        SendMode.NORMAL -> true
+    }
+
+    /**
+     * 拉起系统分享（ACTION_SEND + FileProvider 读授权）：
+     * 微信前台时点击视频、以及全屏浏览页右下角分享按钮共用。
+     */
+    fun shareViaSystem(context: Context, image: ImageItem) {
+        runCatching {
+            val uri = FileProvider.getUriForFile(
+                context, ImageRepository.FILE_PROVIDER_AUTHORITY, File(image.path)
+            )
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = ImageRepository.mimeOf(image.displayName)
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(intent, "分享「${image.displayName}」"))
+        }
     }
 
     /** 上次未检测到聊天窗口时可访问的窗口包名（诊断用，随 Snackbar 提示） */
