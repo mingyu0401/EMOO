@@ -47,9 +47,9 @@ enum class SendResult {
 /**
  * 一键发送管理器（参考搜狗输入法的图片发送体验，非系统分享路径）：
  *
- * 微信：Shizuku 模式下非 GIF 走与 QQ 相同的拖拽；GIF 把图片临时复制到公共
- * Download/，经路径粘贴让微信识别为图片消息，随后自动点击“发送”
- * （无障碍模式仍统一走路径识别）。
+ * 微信：Shizuku 模式下不再区分 GIF/非 GIF，统一把图片临时复制到公共 Download/，
+ * 经路径粘贴让微信识别为图片消息，随后自动点击“发送”（拖拽方案暂时停用）；
+ * 无障碍模式同样走路径识别。
  *
  * QQ：不支持路径识别，走模拟拖拽——图片格子自身是系统拖拽源（长按发起
  * startDragAndDrop，FileProvider uri + 跨应用读授权），无障碍 dispatchGesture
@@ -102,13 +102,11 @@ object ImageSender {
             if (!ShizukuDragInjector.isAvailable()) return@withContext SendResult.SHIZUKU_UNAVAILABLE
             return@withContext withContext(Dispatchers.IO) {
                 if (ShizukuSender.windowBounds(WECHAT_PACKAGE) != null) {
-                    // 微信：非 GIF 走与 QQ 相同的拖拽（长按 0.7s → 0.5s 滑到对侧边缘抬手）；
-                    // GIF 拖入微信会退化成文件/静图，改用路径粘贴让微信识别为表情发送
-                    if (image.isGif) {
-                        ShizukuSender.sendWechat(context, image)
-                    } else {
-                        ShizukuSender.sendQqDrag(context, sourceCenter)
-                    }
+                    // 微信：不再区分 GIF/非 GIF，统一走“复制路径→点输入框→清空→粘贴→点发送”。
+                    // 拖拽方案暂时停用（保留代码备查）：
+                    // if (image.isGif) ShizukuSender.sendWechat(context, image)
+                    // else ShizukuSender.sendQqDrag(context, sourceCenter)
+                    ShizukuSender.sendWechat(context, image)
                 } else if (ShizukuSender.windowBounds(QQ_PACKAGE) != null) {
                     ShizukuSender.sendQqDrag(context, sourceCenter)
                 } else {

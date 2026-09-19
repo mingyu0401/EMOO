@@ -64,6 +64,8 @@ android {
     }
     buildFeatures {
         compose = true
+        // Shizuku UserService 的常驻 shell 通过 AIDL 接口跨进程通信
+        aidl = true
     }
 }
 
