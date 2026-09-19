@@ -1,0 +1,26 @@
+# Gradle / build
+.gradle/
+build/
+*/build/
+app/release/
+/captures
+.externalNativeBuild
+.cxx
+
+# Kotlin
+.kotlin/
+
+# Android Studio / IntelliJ
+*.iml
+.idea/
+!.idea/codeStyles/
+!.idea/inspectionProfiles/
+
+# Local config / secrets
+local.properties
+keystore.properties
+*.keystore
+*.jks
+
+# Misc
+.DS_Store

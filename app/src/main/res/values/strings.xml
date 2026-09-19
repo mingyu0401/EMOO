@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">EMOO</string>
+    <string name="accessibility_service_label">EMOO 一键发送</string>
+    <string name="accessibility_service_description">开启后，小窗中使用 EMOO 时点击图片即可自动粘贴发送到当前聊天窗口（QQ/微信）。</string>
+</resources>
