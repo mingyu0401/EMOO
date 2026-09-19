@@ -5,12 +5,14 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.example.emoo.model.ImageItem
 import com.example.emoo.model.ImportCandidate
+import com.example.emoo.model.StickerSortMode
 import com.example.emoo.send.GifCompressor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.security.MessageDigest
+import java.util.Collections
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -47,6 +49,9 @@ object ImageRepository {
 
     /** 文件夹内 sha256↔文件名 映射文件名（点开头隐藏，扩展名不受支持故不会进网格） */
     private const val HASH_FILE_NAME = ".emoo_sha256"
+
+    /** 文件夹内导入顺序序列文件：每行一个文件名，按导入先后追加（同 HASH 文件机制） */
+    private const val SEQ_FILE_NAME = ".emoo_seq"
 
     fun getRootDir(context: Context): File =
         File(context.getExternalFilesDir(null) ?: context.filesDir, "pictures")
@@ -142,26 +147,125 @@ object ImageRepository {
         }
     }
 
-    /** 列出图片。[folder] 为 null 时聚合全部文件夹，否则只列该文件夹。按修改时间倒序。 */
-    suspend fun listImages(context: Context, folder: String?): List<ImageItem> =
-        withContext(Dispatchers.IO) {
-            val root = getRootDir(context)
-            val files = try {
-                if (folder == null) {
-                    // 图片都存放在各子文件夹内，聚合视图需遍历子目录而非只扫描根目录的文件
-                    root.listFiles { file -> file.isDirectory }?.flatMap { sub ->
-                        sub.listFiles()?.filter { it.isFile } ?: emptyList()
-                    } ?: emptyList()
-                } else {
-                    File(root, folder).listFiles()?.filter { it.isFile } ?: emptyList()
-                }
-            } catch (_: Exception) {
-                return@withContext emptyList()
+    /**
+     * 列出图片。[folder] 为 null 时聚合全部文件夹（固定按创建时间倒序），
+     * 否则按 [sortMode] 应用该文件夹的展示排序（详见 [sortForDisplay]）。
+     * [usageCounts] 仅 USAGE 排序需要，由调用方从 MetaPreferences 传入。
+     */
+    suspend fun listImages(
+        context: Context,
+        folder: String?,
+        sortMode: StickerSortMode = StickerSortMode.DEFAULT,
+        reverse: Boolean = false,
+        usageCounts: Map<String, Int> = emptyMap()
+    ): List<ImageItem> = withContext(Dispatchers.IO) {
+        val root = getRootDir(context)
+        val files = try {
+            if (folder == null) {
+                // 图片都存放在各子文件夹内，聚合视图需遍历子目录而非只扫描根目录的文件
+                root.listFiles { file -> file.isDirectory }?.flatMap { sub ->
+                    sub.listFiles()?.filter { it.isFile } ?: emptyList()
+                } ?: emptyList()
+            } else {
+                File(root, folder).listFiles()?.filter { it.isFile } ?: emptyList()
             }
-            files.filter { isSupportedMedia(it.name) }
-                .sortedByDescending { it.lastModified() }
-                .map { it.toImageItem() }
+        } catch (_: Exception) {
+            return@withContext emptyList()
         }
+        val items = files.filter { isSupportedMedia(it.name) }.map { it.toImageItem() }
+        if (folder == null) {
+            items.sortedByDescending { it.addedTime }
+        } else {
+            sortForDisplay(items, sortMode, reverse, usageCounts, File(root, folder))
+        }
+    }
+
+    /**
+     * 文件夹内展示排序：默认=导入顺序（序列文件，新导入在前，无序列记录的回退创建时间），
+     * 创建时间=文件系统 lastModified，使用次数=计数降序，名称=文件名升序，随机=每次打乱。
+     * 倒序对 默认/创建时间/使用次数/名称 取反；随机本身无序，忽略倒序。
+     */
+    fun sortForDisplay(
+        items: List<ImageItem>,
+        sortMode: StickerSortMode,
+        reverse: Boolean,
+        usageCounts: Map<String, Int>,
+        dir: File
+    ): List<ImageItem> {
+        if (items.isEmpty()) return items
+        val sorted: List<ImageItem> = when (sortMode) {
+            StickerSortMode.DEFAULT -> {
+                val seq = readSeq(dir)
+                val byTime = items.sortedByDescending { it.addedTime }
+                if (seq.isEmpty()) return byTime
+                val maxSeq = seq.values.max()
+                byTime.sortedByDescending { item: ImageItem ->
+                    (seq[item.displayName] ?: (maxSeq + item.addedTime)).toLong()
+                }
+            }
+            StickerSortMode.CREATION -> items.sortedByDescending { it.addedTime }
+            StickerSortMode.USAGE ->
+                items.sortedWith(
+                    compareByDescending<ImageItem> { usageCounts[it.path] ?: 0 }
+                        .thenByDescending { it.addedTime }
+                )
+            StickerSortMode.NAME ->
+                items.sortedWith(
+                    compareBy(String.CASE_INSENSITIVE_ORDER) { item: ImageItem -> item.displayName }
+                        .thenByDescending { it.addedTime }
+                )
+            StickerSortMode.RANDOM -> return items.shuffled()
+        }
+        return if (reverse) sorted.asReversed() else sorted
+    }
+
+    // ================================ 序列文件（导入顺序） ================================
+
+    private fun readSeq(dir: File): Map<String, Int> {
+        val file = File(dir, SEQ_FILE_NAME)
+        if (!file.exists()) return emptyMap()
+        val map = LinkedHashMap<String, Int>()
+        runCatching {
+            file.readLines().forEach { name ->
+                if (name.isNotEmpty()) map[name] = map.size
+            }
+        }
+        return map
+    }
+
+    /** 导入完成后把新文件名按顺序追加到序列文件 */
+    private fun appendSeq(dir: File, names: List<String>) {
+        if (names.isEmpty()) return
+        runCatching {
+            val file = File(dir, SEQ_FILE_NAME)
+            val existing = if (file.exists()) file.readLines().filter { it.isNotEmpty() } else emptyList()
+            val merged = LinkedHashSet<String>().apply {
+                addAll(existing)
+                addAll(names)
+            }
+            file.writeText(merged.joinToString("\n"))
+        }
+    }
+
+    /** 删除文件时从序列文件移除其记录 */
+    private fun removeSeqEntry(dir: File, name: String) {
+        val file = File(dir, SEQ_FILE_NAME)
+        if (!file.exists()) return
+        runCatching {
+            val lines = file.readLines().filter { it.isNotEmpty() && it != name }
+            if (lines.isNotEmpty()) file.writeText(lines.joinToString("\n")) else file.delete()
+        }
+    }
+
+    /** 改名后同步序列文件中的文件名（保持原位置） */
+    private fun renameSeqEntry(dir: File, oldName: String, newName: String) {
+        val file = File(dir, SEQ_FILE_NAME)
+        if (!file.exists() || oldName == newName) return
+        runCatching {
+            val lines = file.readLines().map { if (it == oldName) newName else it }
+            file.writeText(lines.joinToString("\n"))
+        }
+    }
 
     // ================================ 文件夹操作 ================================
 
@@ -199,6 +303,7 @@ object ImageRepository {
                 val ok = file.delete()
                 if (ok) {
                     file.parentFile?.let { dir ->
+                        removeSeqEntry(dir, file.name)
                         val map = readHashMap(dir)
                         val key = map.entries.firstOrNull { it.value == file.name }?.key
                         if (key != null) {
@@ -234,6 +339,7 @@ object ImageRepository {
                     if (target.exists() || !old.renameTo(target)) return@withContext null
                 }
                 val finalFile = File(dir, name)
+                renameSeqEntry(dir, old.name, name)
                 val map = readHashMap(dir)
                 val key = map.entries.firstOrNull { it.value == old.name }?.key
                     ?: finalFile.sha256Hex()
@@ -279,6 +385,7 @@ object ImageRepository {
         if (imported.isNotEmpty()) {
             applyImportPosition(imported, existingFiles, atFront)
             recordHashes(dir, imported)
+            appendSeq(dir, imported.map { it.displayName })
         }
         imported
     }
@@ -314,6 +421,7 @@ object ImageRepository {
         if (imported.isNotEmpty()) {
             applyImportPosition(imported, existingFiles, atFront)
             recordHashes(dir, imported)
+            appendSeq(dir, imported.map { it.displayName })
         }
         imported
     }

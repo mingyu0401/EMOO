@@ -58,6 +58,28 @@ data class ImageItem(
     }
 }
 
+/** 文件夹内表情包的排序方式 */
+enum class StickerSortMode {
+    /** 导入顺序（.emoo_seq 序列文件），新导入在前 */
+    DEFAULT,
+    /** 文件系统创建时间 */
+    CREATION,
+    /** 发送使用次数（含手动点选发送），多者在前 */
+    USAGE,
+    /** 每次进入/刷新时随机 */
+    RANDOM,
+    /** 文件名升序 */
+    NAME;
+
+    companion object {
+        fun fromName(name: String?): StickerSortMode =
+            entries.firstOrNull { it.name == name } ?: DEFAULT
+    }
+}
+
+/** 某文件夹的排序设置：方式 + 是否倒序 */
+data class FolderSort(val mode: StickerSortMode, val reverse: Boolean)
+
 /** “最近”聚合视图中的单条记录 */
 data class RecentEntry(
     val path: String,

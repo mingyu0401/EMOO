@@ -2,8 +2,10 @@ package com.example.emoo.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.example.emoo.model.FolderSort
 import com.example.emoo.model.RecentEntry
 import com.example.emoo.model.SendMode
+import com.example.emoo.model.StickerSortMode
 import com.example.emoo.model.ThemeMode
 import org.json.JSONArray
 import org.json.JSONObject
@@ -137,6 +139,93 @@ class MetaPreferences private constructor(context: Context) {
         sp.edit().putString(KEY_FOLDER_ORDER, JSONArray(folders).toString()).apply()
     }
 
+    // ---------------- 文件夹内表情包排序（持久默认设置） ----------------
+
+    /** 文件夹名 -> 排序设置；未设置过的文件夹不在映射内 */
+    fun getFolderSorts(): Map<String, FolderSort> {
+        val raw = sp.getString(KEY_FOLDER_SORTS, null) ?: return emptyMap()
+        return try {
+            val obj = JSONObject(raw)
+            obj.keys().asSequence().mapNotNull { key ->
+                val v = obj.optJSONObject(key) ?: return@mapNotNull null
+                key to FolderSort(
+                    mode = StickerSortMode.fromName(v.optString("mode")),
+                    reverse = v.optBoolean("reverse")
+                )
+            }.toMap()
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    fun setFolderSort(folder: String, sort: FolderSort) {
+        val obj = readJsonOrNull(KEY_FOLDER_SORTS)
+        obj.put(folder, JSONObject().apply {
+            put("mode", sort.mode.name)
+            put("reverse", sort.reverse)
+        })
+        sp.edit().putString(KEY_FOLDER_SORTS, obj.toString()).apply()
+    }
+
+    fun removeFolderSort(folder: String) {
+        val obj = readJsonOrNull(KEY_FOLDER_SORTS)
+        if (!obj.has(folder)) return
+        obj.remove(folder)
+        sp.edit().putString(KEY_FOLDER_SORTS, obj.toString()).apply()
+    }
+
+    // ---------------- 表情包使用次数（path -> 次数） ----------------
+
+    fun getUsageCounts(): Map<String, Int> {
+        val raw = sp.getString(KEY_USAGE_COUNTS, null) ?: return emptyMap()
+        return try {
+            val obj = JSONObject(raw)
+            obj.keys().asSequence().mapNotNull { key ->
+                val v = obj.optInt(key, -1)
+                if (v > 0) key to v else null
+            }.toMap()
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    fun incrementUsage(path: String) {
+        val obj = readJsonOrNull(KEY_USAGE_COUNTS)
+        obj.put(path, obj.optInt(path, 0) + 1)
+        sp.edit().putString(KEY_USAGE_COUNTS, obj.toString()).apply()
+    }
+
+    /** 文件改名后把计数转移到新路径 */
+    fun transferUsage(oldPath: String, newPath: String) {
+        val obj = readJsonOrNull(KEY_USAGE_COUNTS)
+        if (!obj.has(oldPath)) return
+        obj.put(newPath, obj.optInt(newPath, 0) + obj.optInt(oldPath, 0))
+        obj.remove(oldPath)
+        sp.edit().putString(KEY_USAGE_COUNTS, obj.toString()).apply()
+    }
+
+    fun removeUsage(paths: Collection<String>) {
+        if (paths.isEmpty()) return
+        val obj = readJsonOrNull(KEY_USAGE_COUNTS)
+        if (paths.any { obj.has(it) }) {
+            paths.forEach { obj.remove(it) }
+            sp.edit().putString(KEY_USAGE_COUNTS, obj.toString()).apply()
+        }
+    }
+
+    /** 删除文件夹时清理其排序默认设置与其中所有文件的使用计数 */
+    fun cleanupFolderMeta(folder: String, paths: Collection<String>) {
+        removeFolderSort(folder)
+        removeUsage(paths)
+    }
+
+    private fun readJsonOrNull(key: String): JSONObject =
+        try {
+            JSONObject(sp.getString(key, null) ?: "{}")
+        } catch (_: Exception) {
+            JSONObject()
+        }
+
     // ---------------- 发送方式（Shizuku / 无障碍） ----------------
 
     /**
@@ -177,6 +266,8 @@ class MetaPreferences private constructor(context: Context) {
         private const val KEY_GRID_COLUMNS = "grid_columns"
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_FOLDER_ORDER = "folder_order_json"
+        private const val KEY_FOLDER_SORTS = "folder_sorts_json"
+        private const val KEY_USAGE_COUNTS = "usage_counts_json"
         private const val KEY_SEND_MODE = "send_mode"
         private const val KEY_QQ_SEND_MODE = "qq_send_mode"
 

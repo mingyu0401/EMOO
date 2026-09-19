@@ -12,6 +12,8 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,17 +38,20 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -71,8 +76,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.emoo.MultiWindowState
 import com.example.emoo.data.ImageRepository
 import com.example.emoo.data.MetaPreferences
+import com.example.emoo.model.FolderSort
 import com.example.emoo.model.ImageItem
 import com.example.emoo.model.SendMode
+import com.example.emoo.model.StickerSortMode
 import com.example.emoo.send.ImageSender
 import com.example.emoo.send.SendResult
 import com.example.emoo.send.ShizukuDragInjector
@@ -87,7 +94,7 @@ import kotlinx.coroutines.launch
  * 而是经无障碍服务一键发送到前台聊天应用：微信走“路径识别+自动点发送”，
  * QQ 走“模拟拖拽到聊天窗直接发送”（图片格子同时作为真手指长按拖拽的源）。
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun GalleryScreen(
     viewModel: GalleryViewModel,
@@ -120,6 +127,7 @@ fun GalleryScreen(
     var showAccessibilityGuide by remember { mutableStateOf(false) }
     var showShizukuGuide by remember { mutableStateOf(false) }
     var showReorderDialog by remember { mutableStateOf(false) }
+    var sortFolderTarget by remember { mutableStateOf<String?>(null) }
     var showClearRecentConfirm by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
     // 首次使用（未选择过发送方式）时弹选择：Shizuku（推荐）/ 无障碍
@@ -303,7 +311,10 @@ fun GalleryScreen(
                         if (state.searchActive) viewModel.exitSearch() else viewModel.enterSearch()
                     },
                     onCreateFolder = { showCreateFolderDialog = true },
-                    onLongPressFolder = { showReorderDialog = true },
+                    onLongPressFolder = { folder ->
+                        sortFolderTarget = folder
+                        showReorderDialog = true
+                    },
                     onLongPressRecent = { showClearRecentConfirm = true },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -463,60 +474,143 @@ fun GalleryScreen(
         )
     }
 
-    // 长按文件夹：整理对话框（上下排序 + 删除）。“最近”为固定入口不参与排序
+    // 长按文件夹：整理对话框（上下排序 + 删除 + 表情包排序设置）。“最近”为固定入口不参与排序
     if (showReorderDialog) {
+        val sortFolder = sortFolderTarget
+        val sortable = sortFolder != null && sortFolder == state.selectedFolder && !state.searchActive
+        val currentSort = state.folderSort
+        var sortMode by remember(sortFolder, currentSort) {
+            mutableStateOf(currentSort?.mode ?: StickerSortMode.DEFAULT)
+        }
+        var sortReverse by remember(sortFolder, currentSort) {
+            mutableStateOf(currentSort?.reverse ?: false)
+        }
         AlertDialog(
             onDismissRequest = { showReorderDialog = false },
             title = { Text("整理文件夹") },
             text = {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    if (state.folders.isEmpty()) {
-                        Text(
-                            "还没有文件夹",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    state.folders.forEachIndexed { index, folder ->
-                        ListItem(
-                            headlineContent = { Text(folder) },
-                            leadingContent = { Icon(Icons.Filled.Folder, contentDescription = null) },
-                            trailingContent = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    IconButton(
-                                        enabled = index > 0,
-                                        onClick = { viewModel.moveFolder(folder, up = true) }
-                                    ) {
-                                        Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "上移")
-                                    }
-                                    IconButton(
-                                        enabled = index < state.folders.lastIndex,
-                                        onClick = { viewModel.moveFolder(folder, up = false) }
-                                    ) {
-                                        Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "下移")
-                                    }
-                                    IconButton(onClick = {
-                                        deleteFolderTarget = folder
-                                        showReorderDialog = false
-                                    }) {
-                                        Icon(
-                                            Icons.Filled.Delete,
-                                            contentDescription = "删除文件夹",
-                                            tint = MaterialTheme.colorScheme.error
-                                        )
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f, fill = false)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        if (state.folders.isEmpty()) {
+                            Text(
+                                "还没有文件夹",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        state.folders.forEachIndexed { index, folder ->
+                            ListItem(
+                                headlineContent = { Text(folder) },
+                                leadingContent = { Icon(Icons.Filled.Folder, contentDescription = null) },
+                                trailingContent = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        IconButton(
+                                            enabled = index > 0,
+                                            onClick = { viewModel.moveFolder(folder, up = true) }
+                                        ) {
+                                            Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "上移")
+                                        }
+                                        IconButton(
+                                            enabled = index < state.folders.lastIndex,
+                                            onClick = { viewModel.moveFolder(folder, up = false) }
+                                        ) {
+                                            Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "下移")
+                                        }
+                                        IconButton(onClick = {
+                                            deleteFolderTarget = folder
+                                            showReorderDialog = false
+                                        }) {
+                                            Icon(
+                                                Icons.Filled.Delete,
+                                                contentDescription = "删除文件夹",
+                                                tint = MaterialTheme.colorScheme.error
+                                            )
+                                        }
                                     }
                                 }
+                            )
+                        }
+                    }
+
+                    // 表情包排序设置（仅对当前打开的文件夹）
+                    if (sortable && sortFolder != null) {
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                        Text(
+                            "「$sortFolder」表情包排序",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            sortModeDescription(sortMode),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp, bottom = 6.dp)
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(0.dp)
+                        ) {
+                            StickerSortMode.entries.forEach { mode ->
+                                FilterChip(
+                                    selected = sortMode == mode,
+                                    onClick = { sortMode = mode },
+                                    label = { Text(sortModeLabel(mode)) }
+                                )
+                            }
+                        }
+                        ListItem(
+                            headlineContent = { Text("倒序") },
+                            supportingContent = {
+                                if (sortMode == StickerSortMode.RANDOM) Text("随机排序无倒序意义")
+                            },
+                            trailingContent = {
+                                Switch(
+                                    checked = sortReverse,
+                                    onCheckedChange = { sortReverse = it },
+                                    enabled = sortMode != StickerSortMode.RANDOM
+                                )
                             }
                         )
                     }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showReorderDialog = false }) { Text("完成") }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val appliedFolder = sortFolder?.takeIf { sortable }
+                    if (appliedFolder != null) {
+                        TextButton(onClick = {
+                            showReorderDialog = false
+                            viewModel.setFolderSort(
+                                appliedFolder, FolderSort(sortMode, sortReverse), persist = false
+                            )
+                            scope.launch {
+                                snackbarHostState.showSnackbar("已应用临时排序（下次进入文件夹恢复）")
+                            }
+                        }) { Text("临时排序") }
+                        TextButton(onClick = {
+                            showReorderDialog = false
+                            viewModel.setFolderSort(
+                                appliedFolder, FolderSort(sortMode, sortReverse), persist = true
+                            )
+                            scope.launch {
+                                snackbarHostState.showSnackbar("已覆盖「$appliedFolder」默认排序")
+                            }
+                        }) { Text("覆盖默认排序") }
+                    } else {
+                        TextButton(onClick = { showReorderDialog = false }) { Text("完成") }
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showReorderDialog = false }) { Text("取消") }
             }
         )
     }
@@ -696,4 +790,20 @@ fun GalleryScreen(
             }
         )
     }
+}
+
+private fun sortModeLabel(mode: StickerSortMode): String = when (mode) {
+    StickerSortMode.DEFAULT -> "默认"
+    StickerSortMode.CREATION -> "创建时间"
+    StickerSortMode.USAGE -> "使用次数"
+    StickerSortMode.RANDOM -> "每次随机"
+    StickerSortMode.NAME -> "名称"
+}
+
+private fun sortModeDescription(mode: StickerSortMode): String = when (mode) {
+    StickerSortMode.DEFAULT -> "按导入先后排列，新导入的在前"
+    StickerSortMode.CREATION -> "按文件系统创建时间排列"
+    StickerSortMode.USAGE -> "按发送使用次数排列，常用在前"
+    StickerSortMode.RANDOM -> "每次进入或刷新时随机打乱"
+    StickerSortMode.NAME -> "按文件名升序排列"
 }
