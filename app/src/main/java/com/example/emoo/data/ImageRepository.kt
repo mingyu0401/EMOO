@@ -105,6 +105,10 @@ object ImageRepository {
         displayName = name,
         folderName = parentFile?.name ?: "",
         addedTime = lastModified(),
+        creationTime = runCatching {
+            java.nio.file.Files.readAttributes(toPath(), java.nio.file.attribute.BasicFileAttributes::class.java)
+                .creationTime().toMillis()
+        }.getOrNull(),
         size = length(),
         previewText = if (isSupportedText(name)) textPreview() else null
     )
@@ -203,7 +207,10 @@ object ImageRepository {
                     (seq[item.displayName] ?: (maxSeq + item.addedTime)).toLong()
                 }
             }
-            StickerSortMode.CREATION -> items.sortedByDescending { it.addedTime }
+            StickerSortMode.CREATION -> items.sortedWith(
+                compareByDescending<ImageItem> { it.creationTime ?: it.addedTime }
+                    .thenByDescending { it.addedTime }
+            )
             StickerSortMode.USAGE ->
                 items.sortedWith(
                     compareByDescending<ImageItem> { usageCounts[it.path] ?: 0 }

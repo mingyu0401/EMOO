@@ -122,6 +122,13 @@ class MetaPreferences private constructor(context: Context) {
         sp.edit().putString(KEY_THEME_MODE, mode.name).apply()
     }
 
+    /** 网格角标是否显示使用次数 */
+    fun getShowUsageCount(): Boolean = sp.getBoolean(KEY_SHOW_USAGE, false)
+
+    fun setShowUsageCount(show: Boolean) {
+        sp.edit().putBoolean(KEY_SHOW_USAGE, show).apply()
+    }
+
     // ---------------- 文件夹自定义排序 ----------------
 
     /** 返回用户自定义的文件夹顺序（仅包含仍存在的文件夹由调用方过滤） */
@@ -265,6 +272,7 @@ class MetaPreferences private constructor(context: Context) {
         private const val KEY_PREVIEWS = "folder_previews_json"
         private const val KEY_GRID_COLUMNS = "grid_columns"
         private const val KEY_THEME_MODE = "theme_mode"
+        private const val KEY_SHOW_USAGE = "show_usage_count"
         private const val KEY_FOLDER_ORDER = "folder_order_json"
         private const val KEY_FOLDER_SORTS = "folder_sorts_json"
         private const val KEY_USAGE_COUNTS = "usage_counts_json"

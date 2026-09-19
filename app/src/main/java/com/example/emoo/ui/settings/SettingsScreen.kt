@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.FolderShared
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
@@ -37,6 +38,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -75,6 +77,7 @@ fun SettingsScreen(settingsViewModel: SettingsViewModel) {
     val themeMode by settingsViewModel.themeMode.collectAsStateWithLifecycle()
     val gridColumns by settingsViewModel.gridColumns.collectAsStateWithLifecycle()
     val sendMode by settingsViewModel.sendMode.collectAsStateWithLifecycle()
+    val showUsageCount by settingsViewModel.showUsageCount.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -156,6 +159,19 @@ fun SettingsScreen(settingsViewModel: SettingsViewModel) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 24.dp)
+            )
+
+            // 显示使用次数角标：网格格子右下角 ×N
+            ListItem(
+                headlineContent = { Text("显示使用次数") },
+                supportingContent = { Text("在格子右下角显示角标 ×N（N 为发送使用次数）") },
+                leadingContent = { Icon(Icons.Filled.Tag, contentDescription = null) },
+                trailingContent = {
+                    Switch(
+                        checked = showUsageCount,
+                        onCheckedChange = { settingsViewModel.setShowUsageCount(it) }
+                    )
+                }
             )
 
             // 发送方式：影响 QQ 与微信两条发送链路

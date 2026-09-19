@@ -28,6 +28,15 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _sendMode = MutableStateFlow(meta.getSendMode())
     val sendMode: StateFlow<SendMode> = _sendMode.asStateFlow()
 
+    /** 网格角标是否显示使用次数 */
+    private val _showUsageCount = MutableStateFlow(meta.getShowUsageCount())
+    val showUsageCount: StateFlow<Boolean> = _showUsageCount.asStateFlow()
+
+    fun setShowUsageCount(show: Boolean) {
+        meta.setShowUsageCount(show)
+        _showUsageCount.value = show
+    }
+
     /** “最近”记录变更版本号（清理/撤销后自增，供图片页监听刷新） */
     private val _recentVersion = MutableStateFlow(0)
     val recentVersion: StateFlow<Int> = _recentVersion.asStateFlow()

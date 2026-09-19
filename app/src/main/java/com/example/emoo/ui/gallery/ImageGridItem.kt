@@ -73,7 +73,8 @@ fun ImageGridItem(
     image: ImageItem,
     onClick: (screenCenter: Offset) -> Unit,
     onLongPress: () -> Unit,
-    dragSource: Boolean = false
+    dragSource: Boolean = false,
+    usageCount: Int? = null
 ) {
     val view = LocalView.current
     val context = LocalContext.current
@@ -183,6 +184,21 @@ fun ImageGridItem(
                 color = Color.White,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
+                    .padding(3.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0x99000000))
+                    .padding(horizontal = 4.dp, vertical = 1.dp)
+            )
+        }
+        // 使用次数角标（设置页开关控制），与类型角标分列两侧
+        if (usageCount != null && usageCount > 0) {
+            Text(
+                text = "×$usageCount",
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
                     .padding(3.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .background(Color(0x99000000))

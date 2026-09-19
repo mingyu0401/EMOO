@@ -72,6 +72,10 @@ fun EMOOApp(
     val gridColumns by settingsViewModel.gridColumns.collectAsStateWithLifecycle()
     LaunchedEffect(gridColumns) { galleryViewModel.setGridColumns(gridColumns) }
 
+    // 使用次数角标开关即时同步到图片页
+    val showUsageCount by settingsViewModel.showUsageCount.collectAsStateWithLifecycle()
+    LaunchedEffect(showUsageCount) { galleryViewModel.setShowUsageCount(showUsageCount) }
+
     // 设置页清理/撤销“最近”后即时刷新图片页
     val recentVersion by settingsViewModel.recentVersion.collectAsStateWithLifecycle()
     LaunchedEffect(recentVersion) {

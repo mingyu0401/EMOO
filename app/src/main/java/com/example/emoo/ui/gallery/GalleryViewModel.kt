@@ -36,14 +36,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val searchActive: Boolean = false,
         val searchQuery: String = "",
         /** 当前文件夹生效的排序（临时覆盖优先于持久默认；null=默认序） */
-        val folderSort: FolderSort? = null
+        val folderSort: FolderSort? = null,
+        /** 是否在网格角标显示使用次数 */
+        val showUsageCount: Boolean = false,
+        /** path -> 发送使用次数（角标与 USAGE 排序共用） */
+        val usageCounts: Map<String, Int> = emptyMap()
     )
 
     private val meta = MetaPreferences.get(application)
     private val context get() = getApplication<Application>()
-
-    /** 本次进程内的临时排序覆盖（folder -> 排序），不写入持久设置 */
-    private val tempSorts = mutableMapOf<String, FolderSort>()
 
     /** 搜索态下的全库图片缓存：输入关键字时只在内存过滤，不重复扫盘 */
     private var searchBase: List<ImageItem> = emptyList()
@@ -106,28 +107,21 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     previewMap = previews,
                     gridColumns = meta.getGridColumns(),
                     folderSort = sort,
+                    showUsageCount = meta.getShowUsageCount(),
+                    usageCounts = meta.getUsageCounts(),
                     loading = false
                 )
             }
         }
     }
 
-    /** 解析文件夹生效排序：临时覆盖 > 持久默认（未设置过即默认序） */
-    private fun resolveSort(folder: String): FolderSort? =
-        tempSorts[folder] ?: meta.getFolderSorts()[folder]
+    /** 解析文件夹生效排序（未设置过即默认序） */
+    private fun resolveSort(folder: String): FolderSort? = meta.getFolderSorts()[folder]
 
-    /**
-     * 应用文件夹内表情包排序。[persist] 为 true 时覆盖持久默认，
-     * 否则仅作为本次进程的临时排序。
-     */
-    fun setFolderSort(folder: String, sort: FolderSort, persist: Boolean) {
-        if (persist) meta.setFolderSort(folder, sort) else tempSorts[folder] = sort
+    /** 保存文件夹的自定义排序 */
+    fun setFolderSort(folder: String, sort: FolderSort) {
+        meta.setFolderSort(folder, sort)
         if (_state.value.selectedFolder == folder) refresh()
-    }
-
-    /** 清除该文件夹的临时排序，恢复持久默认 */
-    fun clearTempSort(folder: String) {
-        if (tempSorts.remove(folder) != null && _state.value.selectedFolder == folder) refresh()
     }
 
     /** 进入搜索态：扫全库备用，但列表初始为空白，输入关键字后展示过滤结果。
@@ -257,6 +251,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         _state.update { it.copy(gridColumns = columns.coerceIn(2, 6)) }
     }
 
+    /** 网格角标显示使用次数的开关 */
+    fun setShowUsageCount(show: Boolean) {
+        meta.setShowUsageCount(show)
+        _state.update {
+            it.copy(showUsageCount = show, usageCounts = if (show) meta.getUsageCounts() else it.usageCounts)
+        }
+    }
+
     /** 新建真实文件夹，成功后选中它 */
     fun createFolder(name: String, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
@@ -329,7 +331,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             meta.setFolderPreview(folder, null, null)
             meta.setFolderOrder(meta.getFolderOrder() - folder)
             meta.cleanupFolderMeta(folder, paths + recentPaths)
-            tempSorts.remove(folder)
             meta.removeFromRecent(recentPaths)
             refresh()
             onResult(deleted)

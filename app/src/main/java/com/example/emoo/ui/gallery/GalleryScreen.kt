@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
@@ -265,7 +267,9 @@ fun GalleryScreen(
                                     if (!inMultiWindow) longPressImage = image
                                 },
                                 // 文字不参与拖拽发送
-                                dragSource = inMultiWindow && !image.isText
+                                dragSource = inMultiWindow && !image.isText,
+                                usageCount =
+                                    if (state.showUsageCount) state.usageCounts[image.path] else null
                             )
                         }
                     }
@@ -330,21 +334,10 @@ fun GalleryScreen(
         }
     }
 
-    // 长按图片：操作菜单（底部弹窗）
+    // 长按图片：操作菜单（底部弹窗）。文件名条目置顶，其下为文件信息与操作项
     longPressImage?.let { image ->
         ModalBottomSheet(onDismissRequest = { longPressImage = null }) {
-            if (!image.isText) {
-                ListItem(
-                    headlineContent = { Text("设为「${image.folderName}」的预览图") },
-                    leadingContent = { Icon(Icons.Filled.Image, contentDescription = null) },
-                    modifier = Modifier.clickable {
-                        viewModel.setFolderPreview(image)
-                        longPressImage = null
-                        scope.launch { snackbarHostState.showSnackbar("已设为文件夹预览图") }
-                    }
-                )
-            }
-            // 文件名条目：长按文件名可复制到剪贴板
+            // 文件名条目（置顶）：长按文件名可复制到剪贴板
             ListItem(
                 headlineContent = {
                     Text(
@@ -365,8 +358,30 @@ fun GalleryScreen(
                 leadingContent = { Icon(Icons.Filled.Description, contentDescription = null) }
             )
             ListItem(
+                headlineContent = { Text("信息") },
+                leadingContent = { Icon(Icons.Filled.Info, contentDescription = null) },
+                supportingContent = {
+                    Column {
+                        infoRow("创建时间", formatTime(image.creationTime))
+                        infoRow("导入时间", formatTime(image.addedTime))
+                        infoRow("使用次数", "${state.usageCounts[image.path] ?: 0} 次")
+                        infoRow("文件大小", formatFileSize(image.size))
+                    }
+                }
+            )
+            if (!image.isText) {
+                ListItem(
+                    headlineContent = { Text("设为「${image.folderName}」的预览图") },
+                    leadingContent = { Icon(Icons.Filled.Image, contentDescription = null) },
+                    modifier = Modifier.clickable {
+                        viewModel.setFolderPreview(image)
+                        longPressImage = null
+                        scope.launch { snackbarHostState.showSnackbar("已设为文件夹预览图") }
+                    }
+                )
+            }
+            ListItem(
                 headlineContent = { Text("重命名") },
-                supportingContent = { Text(image.displayName) },
                 leadingContent = { Icon(Icons.Filled.Edit, contentDescription = null) },
                 modifier = Modifier.clickable {
                     renameTarget = image
@@ -375,7 +390,6 @@ fun GalleryScreen(
             )
             ListItem(
                 headlineContent = { Text("删除图片") },
-                supportingContent = { Text(image.displayName) },
                 leadingContent = { Icon(Icons.Filled.Delete, contentDescription = null) },
                 modifier = Modifier.clickable {
                     deleteImageTarget = image
@@ -557,7 +571,7 @@ fun GalleryScreen(
                             style = MaterialTheme.typography.titleSmall
                         )
                         Text(
-                            sortModeDescription(sortMode),
+                            sortModeHint(sortMode, sortReverse),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 2.dp, bottom = 6.dp)
@@ -597,21 +611,13 @@ fun GalleryScreen(
                         TextButton(onClick = {
                             showReorderDialog = false
                             viewModel.setFolderSort(
-                                appliedFolder, FolderSort(sortMode, sortReverse), persist = false
+                                appliedFolder, FolderSort(sortMode, sortReverse)
                             )
                             scope.launch {
-                                snackbarHostState.showSnackbar("已应用临时排序（下次进入文件夹恢复）")
+                                snackbarHostState.showSnackbar("已覆盖「$appliedFolder」自定义排序")
                             }
-                        }) { Text("临时排序") }
-                        TextButton(onClick = {
-                            showReorderDialog = false
-                            viewModel.setFolderSort(
-                                appliedFolder, FolderSort(sortMode, sortReverse), persist = true
-                            )
-                            scope.launch {
-                                snackbarHostState.showSnackbar("已覆盖「$appliedFolder」默认排序")
-                            }
-                        }) { Text("覆盖默认排序") }
+                        }) { Text("覆盖自定义") }
+                        TextButton(onClick = { showReorderDialog = false }) { Text("确认") }
                     } else {
                         TextButton(onClick = { showReorderDialog = false }) { Text("完成") }
                     }
@@ -801,17 +807,60 @@ fun GalleryScreen(
 }
 
 private fun sortModeLabel(mode: StickerSortMode): String = when (mode) {
-    StickerSortMode.DEFAULT -> "默认"
+    StickerSortMode.DEFAULT -> "自定义"
     StickerSortMode.CREATION -> "创建时间"
     StickerSortMode.USAGE -> "使用次数"
     StickerSortMode.RANDOM -> "每次随机"
     StickerSortMode.NAME -> "名称"
 }
 
-private fun sortModeDescription(mode: StickerSortMode): String = when (mode) {
-    StickerSortMode.DEFAULT -> "按导入先后排列，新导入的在前"
-    StickerSortMode.CREATION -> "按文件系统创建时间排列"
-    StickerSortMode.USAGE -> "按发送使用次数排列，常用在前"
+/** 排序方式说明：随倒序开关切换正向/反向文案 */
+private fun sortModeHint(mode: StickerSortMode, reverse: Boolean): String = when (mode) {
+    StickerSortMode.DEFAULT -> if (!reverse) {
+        "按当前自定义顺序（导入先后，新导入在前）"
+    } else {
+        "自定义顺序反向：最早导入在前，最新在后"
+    }
+    StickerSortMode.CREATION -> if (!reverse) {
+        "按文件系统创建时间，新创建在前"
+    } else {
+        "按文件系统创建时间，早创建在前"
+    }
+    StickerSortMode.USAGE -> if (!reverse) {
+        "按发送使用次数，常用在前"
+    } else {
+        "按发送使用次数，少用在前"
+    }
     StickerSortMode.RANDOM -> "每次进入或刷新时随机打乱"
-    StickerSortMode.NAME -> "按文件名升序排列"
+    StickerSortMode.NAME -> if (!reverse) {
+        "按文件名升序（A→Z）"
+    } else {
+        "按文件名降序（Z→A）"
+    }
+}
+
+@Composable
+private fun infoRow(label: String, value: String) {
+    Row {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(64.dp)
+        )
+        Text(text = value, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+private fun formatTime(time: Long?): String {
+    if (time == null) return "未知"
+    return java.text.SimpleDateFormat(
+        "yyyy-MM-dd HH:mm", java.util.Locale.CHINA
+    ).format(java.util.Date(time))
+}
+
+private fun formatFileSize(size: Long): String = when {
+    size >= 1 shl 20 -> String.format(java.util.Locale.CHINA, "%.1f MB", size / 1048576.0)
+    size >= 1024 -> String.format(java.util.Locale.CHINA, "%.1f KB", size / 1024.0)
+    else -> "$size B"
 }

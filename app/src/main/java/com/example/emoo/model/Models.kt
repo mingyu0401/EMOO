@@ -37,7 +37,10 @@ data class ImageItem(
     val path: String,
     val displayName: String,
     val folderName: String,
+    /** 导入时间（文件系统 lastModified，导入位置通过改写它实现） */
     val addedTime: Long,
+    /** 文件系统创建时间；取不到（旧设备/不支持）为 null */
+    val creationTime: Long? = null,
     val size: Long,
     /** 文字文件（.txt）正文前缀，供网格卡片显示；图片/视频为 null */
     val previewText: String? = null
