@@ -130,13 +130,21 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         if (tempSorts.remove(folder) != null && _state.value.selectedFolder == folder) refresh()
     }
 
-    /** 进入搜索态：扫全库备用，但列表初始为空白，输入关键字后展示过滤结果 */
+    /** 进入搜索态：扫全库备用，但列表初始为空白，输入关键字后展示过滤结果。
+     * 同时清空文件夹选中，保证侧栏只有「搜索」一项高亮 */
     fun enterSearch() {
         viewModelScope.launch {
             val base = ImageRepository.listImages(context, null)
             searchBase = base
             _state.update {
-                it.copy(searchActive = true, searchQuery = "", images = emptyList(), loading = false)
+                it.copy(
+                    searchActive = true,
+                    searchQuery = "",
+                    selectedFolder = null,
+                    images = emptyList(),
+                    folderSort = null,
+                    loading = false
+                )
             }
         }
     }
@@ -179,21 +187,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * 侧栏点击切换视图。搜索态下先退出搜索；点击当前已选文件夹不做任何事
-     * （否则 ON_RESUME 式的整表刷新会让网格重置）；真正切换时立即清空旧列表，
+     * 侧栏点击切换视图（高亮唯一）：点击任何条目都会退出搜索态；
+     * 进入「最近」时清空文件夹选中。点击当前已选条目不做任何事
+     * （否则整表刷新会让网格重置）；真正切换时立即清空旧列表，
      * 避免上一文件夹的图片在加载期间残留。
      */
     fun selectFolder(folder: String?) {
         val prev = _state.value
-        val same = prev.selectedFolder == folder && !prev.searchActive
-        if (same) return
-        val keepsImages = folder != null && folder == prev.selectedFolder
+        if (!prev.searchActive && prev.selectedFolder == folder) return
         _state.update {
             it.copy(
                 selectedFolder = folder,
                 searchActive = false,
                 searchQuery = "",
-                images = if (keepsImages) it.images else emptyList()
+                images = emptyList()
             )
         }
         refresh()
