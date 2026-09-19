@@ -203,7 +203,7 @@ fun ImageViewerScreen(
     }
 }
 
-/** 文字查看页：白底黑字可滚动显示全文，右下角提供"复制全文" */
+/** 文字查看页：底色/文字跟随深浅色主题，可滚动显示全文，右下角提供"复制全文" */
 @Composable
 private fun TextReaderPage(image: ImageItem) {
     val context = LocalContext.current
@@ -214,7 +214,7 @@ private fun TextReaderPage(image: ImageItem) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.White)
+            .background(MaterialTheme.colorScheme.surfaceContainer)
     ) {
         Column(
             modifier = Modifier
@@ -224,7 +224,7 @@ private fun TextReaderPage(image: ImageItem) {
         ) {
             Text(
                 text = content?.takeIf { it.isNotBlank() } ?: if (content == null) "加载中…" else "（空）",
-                color = Color(0xDE000000),
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 16.sp,
                 lineHeight = 24.sp
             )
