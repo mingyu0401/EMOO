@@ -48,6 +48,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /** 搜索态下的全库图片缓存：输入关键字时只在内存过滤，不重复扫盘 */
     private var searchBase: List<ImageItem> = emptyList()
 
+    /** 刷新令牌：异步刷新只写回自己那一代的结果，防连点切文件夹时旧结果覆盖新结果 */
+    private var refreshToken = 0
+
     private val _state = MutableStateFlow(GalleryState(gridColumns = meta.getGridColumns()))
     val state: StateFlow<GalleryState> = _state.asStateFlow()
 
@@ -68,6 +71,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     /** 重新扫描目录（进入前台、增删后调用），保证与文件系统一致 */
     fun refresh() {
+        val token = ++refreshToken
         viewModelScope.launch {
             _state.update { it.copy(loading = true) }
             val folders = orderedFolders(ImageRepository.listFolders(context))
@@ -90,6 +94,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val previews = meta.getFolderPreviews()
                 .filterKeys { it in folders }
                 .mapValues { it.value.second }
+            // 期间又发起了新的刷新/切换时，丢弃本次过期结果
+            if (token != refreshToken) return@launch
             _state.update {
                 it.copy(
                     folders = folders,
@@ -165,8 +171,24 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             .map { it.second }
     }
 
+    /**
+     * 侧栏点击切换视图。搜索态下先退出搜索；点击当前已选文件夹不做任何事
+     * （否则 ON_RESUME 式的整表刷新会让网格重置）；真正切换时立即清空旧列表，
+     * 避免上一文件夹的图片在加载期间残留。
+     */
     fun selectFolder(folder: String?) {
-        _state.update { it.copy(selectedFolder = folder) }
+        val prev = _state.value
+        val same = prev.selectedFolder == folder && !prev.searchActive
+        if (same) return
+        val keepsImages = folder != null && folder == prev.selectedFolder
+        _state.update {
+            it.copy(
+                selectedFolder = folder,
+                searchActive = false,
+                searchQuery = "",
+                images = if (keepsImages) it.images else emptyList()
+            )
+        }
         refresh()
     }
 

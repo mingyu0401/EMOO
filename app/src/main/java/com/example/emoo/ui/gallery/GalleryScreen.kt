@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -140,6 +141,10 @@ fun GalleryScreen(
         deleteFolderCount = deleteFolderTarget?.let { viewModel.countImages(it) } ?: 0
     }
 
+    // 切换文件夹/进出搜索时网格回到顶部，避免沿用上一列表的滚动位置
+    val gridState = rememberLazyGridState()
+    LaunchedEffect(state.selectedFolder, state.searchActive) { gridState.scrollToItem(0) }
+
     /** 小窗模式下点击图片：一键发送到前台聊天应用（[center] 为被点格子的屏幕中心，QQ 拖拽起点） */
     fun sendImage(image: ImageItem, center: androidx.compose.ui.geometry.Offset?) {
         if (sending) return
@@ -221,6 +226,7 @@ fun GalleryScreen(
                     val inMultiWindow = MultiWindowState.isInMultiWindow ||
                         (context as? Activity)?.isInMultiWindowMode == true
                     LazyVerticalGrid(
+                        state = gridState,
                         columns = GridCells.Fixed(state.gridColumns),
                         contentPadding = PaddingValues(4.dp),
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -249,7 +255,7 @@ fun GalleryScreen(
                                         } else {
                                             showAccessibilityGuide = true
                                         }
-                                    } else {
+                                    } else if (state.images.isNotEmpty()) {
                                         onOpenImage(index)
                                     }
                                 },
