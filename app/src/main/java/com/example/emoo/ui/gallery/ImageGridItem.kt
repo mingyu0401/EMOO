@@ -113,9 +113,19 @@ fun ImageGridItem(
                                 // 真手指拖动仍保留缩略图虚影
                                 val autoDrag = DragSessionState.consumeAutoDrag()
                                 val file = File(image.path)
-                                val uri = FileProvider.getUriForFile(
-                                    context, ImageRepository.FILE_PROVIDER_AUTHORITY, file
-                                )
+                                // 微信模拟拖拽用 MediaStore staged uri（相册同源载荷，微信
+                                // 对外部 authority 的 FileProvider 载荷拒收）；真手指拖动与
+                                // QQ 拖拽仍用 FileProvider uri
+                                val uri = if (autoDrag) {
+                                    DragSessionState.consumeStagedUri()
+                                        ?: FileProvider.getUriForFile(
+                                            context, ImageRepository.FILE_PROVIDER_AUTHORITY, file
+                                        )
+                                } else {
+                                    FileProvider.getUriForFile(
+                                        context, ImageRepository.FILE_PROVIDER_AUTHORITY, file
+                                    )
+                                }
                                 // 显式声明 MIME（对齐系统相册的拖拽载荷）：
                                 // ClipData.newUri 依赖 resolver 反查类型，微信对类型缺失/
                                 // 不明确的载荷会拒收，导致拖入后不发送。图片/视频统一按扩展名推断

@@ -51,9 +51,10 @@ enum class SendResult {
 /**
  * 一键发送管理器（参考搜狗输入法的图片发送体验，非系统分享路径）：
  *
- * 微信：Shizuku 模式下不再区分 GIF/非 GIF，统一把图片临时复制到公共 Download/，
- * 经路径粘贴让微信识别为图片消息，随后自动点击“发送”（拖拽方案暂时停用）；
- * 无障碍模式同样走路径识别。
+ * 微信：拖拽通道——图片先临时复制到公共 Download/ 经 MediaStore 取得
+ * “相册同源” content uri（微信对外部 authority 的 FileProvider 载荷拒收），
+ * 格子拖拽源用该 uri 构造 ClipData，再复用拖拽注入手势拖进微信聊天窗；
+ * staging 失败回退原路径粘贴通道（剪贴板路径 + 焦点侦测 + KEYCODE_PASTE）。
  *
  * QQ：不支持路径识别，走模拟拖拽——图片格子自身是系统拖拽源（长按发起
  * startDragAndDrop，FileProvider uri + 跨应用读授权），无障碍 dispatchGesture
@@ -108,11 +109,18 @@ object ImageSender {
                 if (ShizukuSender.windowBounds(WECHAT_PACKAGE) != null) {
                     // 视频经微信路径识别发送不可行，暂不支持（QQ 拖拽仍可用）
                     if (image.isVideo) return@withContext SendResult.WECHAT_VIDEO_UNSUPPORTED
-                    // 微信：不再区分 GIF/非 GIF，统一走“复制路径→点输入框→清空→粘贴→点发送”。
-                    // 拖拽方案暂时停用（保留代码备查）：
-                    // if (image.isGif) ShizukuSender.sendWechat(context, image)
-                    // else ShizukuSender.sendQqDrag(context, sourceCenter)
-                    ShizukuSender.sendWechat(context, image)
+                    // 微信拖拽通道：先 stage 到 MediaStore 拿相册同源 uri，
+                    // 复用拖拽注入手势拖进微信窗；staging 失败回退路径粘贴通道
+                    val staged = stageToDownloads(context, image)
+                    if (staged != null) {
+                        DragSessionState.setStagedUri(staged.first)
+                        val result = ShizukuSender.sendQqDrag(context, sourceCenter)
+                        if (result != SendResult.SENT) DragSessionState.setStagedUri(null)
+                        scheduleStagedCleanup(context, staged.first)
+                        result
+                    } else {
+                        ShizukuSender.sendWechat(context, image)
+                    }
                 } else if (ShizukuSender.windowBounds(QQ_PACKAGE) != null) {
                     ShizukuSender.sendQqDrag(context, sourceCenter)
                 } else {
@@ -134,8 +142,11 @@ object ImageSender {
         }
         when {
             scan.targets.containsKey(WECHAT_PACKAGE) ->
-                if (image.isVideo) SendResult.WECHAT_VIDEO_UNSUPPORTED
-                else sendViaWechat(service, context, image, scan.targets[WECHAT_PACKAGE])
+                if (image.isVideo) {
+                    SendResult.WECHAT_VIDEO_UNSUPPORTED
+                } else {
+                    sendViaWechatDrag(service, context, image, scan.targets[WECHAT_PACKAGE], sourceCenter)
+                }
             scan.targets.containsKey(QQ_PACKAGE) ->
                 sendViaQQDrag(service, context, sourceCenter)
             else -> {
@@ -146,6 +157,27 @@ object ImageSender {
     }
 
     // ================================ 微信：路径识别 ================================
+
+    /**
+     * 无障碍模式的微信拖拽通道：先 stage 到 MediaStore 拿相册同源 uri（微信
+     * 对外部 authority 的 FileProvider 载荷拒收），再复用 QQ 拖拽手势注入；
+     * staging 失败回退原路径粘贴通道。
+     */
+    private suspend fun sendViaWechatDrag(
+        service: PasteAccessibilityService,
+        context: Context,
+        image: ImageItem,
+        wechatWindow: AccessibilityWindowInfo?,
+        sourceCenter: androidx.compose.ui.geometry.Offset?
+    ): SendResult {
+        val staged = stageToDownloads(context, image)
+            ?: return sendViaWechat(service, context, image, wechatWindow)
+        DragSessionState.setStagedUri(staged.first)
+        val result = sendViaQQDrag(service, context, sourceCenter)
+        if (result != SendResult.SENT) DragSessionState.setStagedUri(null)
+        scheduleStagedCleanup(context, staged.first)
+        return result
+    }
 
     private suspend fun sendViaWechat(
         service: PasteAccessibilityService,
