@@ -26,6 +26,8 @@ sealed interface ImportStep {
     data object PickSource : ImportStep
     data class PickImages(val candidates: List<ImportCandidate>) : ImportStep
     data class PickTarget(val selected: List<ImportCandidate>) : ImportStep
+    /** 文字导入：段落列表 -> 选择目标文件夹 -> 各写为一个 .txt */
+    data class PickTextTarget(val texts: List<String>) : ImportStep
 }
 
 /**
@@ -72,12 +74,12 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             val candidates = withContext(Dispatchers.IO) {
                 uris.mapNotNull { uri ->
                     val name = repo.displayNameOf(context, uri) ?: return@mapNotNull null
-                    if (repo.isSupportedImage(name)) ImportCandidate(uri, name) else null
+                    if (repo.isSupportedMedia(name)) ImportCandidate(uri, name) else null
                 }
             }
             _loading.value = false
             if (candidates.isEmpty()) {
-                _message.tryEmit("未选择受支持的图片（仅支持 jpg/jpeg/png/gif）")
+                _message.tryEmit("未选择受支持的图片或视频")
             } else {
                 _step.value = ImportStep.PickImages(candidates)
                 _selection.value = candidates.map { it.uri }.toSet()
@@ -95,7 +97,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             }
             _loading.value = false
             if (candidates.isEmpty()) {
-                _message.tryEmit("该文件夹内没有受支持的图片")
+                _message.tryEmit("该文件夹内没有受支持的图片或视频")
             } else {
                 _step.value = ImportStep.PickImages(candidates)
                 _selection.value = candidates.map { it.uri }.toSet()
@@ -121,6 +123,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         when (val current = _step.value) {
             is ImportStep.PickImages -> _step.value = ImportStep.PickSource
             is ImportStep.PickTarget -> _step.value = ImportStep.PickImages(current.selected)
+            is ImportStep.PickTextTarget -> _step.value = ImportStep.PickSource
             ImportStep.PickSource -> Unit
         }
     }
@@ -211,6 +214,57 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
 
     fun cancelImport() {
         copyJob?.cancel()
+    }
+
+    // ---------------- 文字导入 ----------------
+
+    /** 用户在文字对话框提交原文：按空行切分为段落，进入目标文件夹选择步骤 */
+    fun onTextSubmitted(raw: String) {
+        val paragraphs = raw.split(Regex("\n\\s*\n"))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        if (paragraphs.isEmpty()) {
+            _message.tryEmit("请输入要导入的文字内容")
+            return
+        }
+        viewModelScope.launch {
+            _loading.value = true
+            _folders.value = repo.listFolders(context)
+            _loading.value = false
+            _step.value = ImportStep.PickTextTarget(paragraphs)
+        }
+    }
+
+    /** 将待导入的每段文字各写为一个 .txt 文件到目标文件夹 */
+    fun startTextImport(targetFolder: String) {
+        val current = _step.value as? ImportStep.PickTextTarget ?: return
+        val atFront = _atFront.value
+        copyJob = viewModelScope.launch {
+            _progress.value = ImportProgress(0, current.texts.size, "")
+            try {
+                val imported = repo.importTexts(
+                    context = context,
+                    paragraphs = current.texts,
+                    targetFolder = targetFolder,
+                    atFront = atFront,
+                    onProgress = { cur, total, name ->
+                        _progress.value = ImportProgress(cur, total, name)
+                    }
+                )
+                meta.addToRecent(imported.map {
+                    RecentEntry(it.path, it.displayName, it.folderName, System.currentTimeMillis())
+                })
+                _message.tryEmit("已导入 ${imported.size} 段文字到「$targetFolder」")
+            } catch (e: CancellationException) {
+                _message.tryEmit("文字导入已取消")
+                throw e
+            } catch (e: Exception) {
+                _message.tryEmit("导入出错：${e.message ?: "未知错误"}")
+            } finally {
+                _progress.value = null
+                reset()
+            }
+        }
     }
 
     fun reset() {

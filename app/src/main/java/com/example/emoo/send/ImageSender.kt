@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
 import android.view.accessibility.AccessibilityWindowInfo
+import com.example.emoo.data.ImageRepository
 import com.example.emoo.data.MetaPreferences
 import com.example.emoo.model.ImageItem
 import com.example.emoo.model.SendMode
@@ -235,6 +236,8 @@ object ImageSender {
         )
 
         DragSessionState.reset()
+        // 与 Shizuku 通道一致：模拟拖拽用透明虚影，避免缩略图横穿屏幕
+        DragSessionState.markAutoPending()
         val gestured = suspendCancellableCoroutine { continuation ->
             service.performDragGesture(
                 targets.fromX, targets.fromY, targets.toX, targets.toY
@@ -242,11 +245,19 @@ object ImageSender {
                 if (continuation.isActive) continuation.resume(completed)
             }
         }
-        if (!gestured) return@withContext SendResult.FAILED
+        if (!gestured) {
+            DragSessionState.consumeAutoDrag()
+            return@withContext SendResult.FAILED
+        }
 
         // 等待 QQ 处理 drop；若拖拽源从未启动（长按未触发 drag），报失败
         delay(900)
-        return@withContext if (DragSessionState.wasStarted()) SendResult.SENT else SendResult.FAILED
+        return@withContext if (DragSessionState.wasStarted()) {
+            SendResult.SENT
+        } else {
+            DragSessionState.consumeAutoDrag()
+            SendResult.FAILED
+        }
     }
 
     // ================================ 临时文件 ================================
@@ -263,12 +274,7 @@ object ImageSender {
             val source = File(image.path)
             if (!source.exists()) return@withContext null
             val ext = image.displayName.substringAfterLast('.', "jpg").lowercase()
-            val mime = when (ext) {
-                "png" -> "image/png"
-                "gif" -> "image/gif"
-                "webp" -> "image/webp"
-                else -> "image/jpeg"
-            }
+            val mime = ImageRepository.mimeOf(image.displayName)
             val values = ContentValues().apply {
                 put(
                     MediaStore.MediaColumns.DISPLAY_NAME,

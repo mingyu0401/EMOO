@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.EMOO" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- 启动预览底色跟随系统深色模式：windowBackground 覆盖 Android 11 及以下，
+         windowSplashScreenBackground 覆盖 Android 12+ 的 starting window -->
+    <style name="Theme.EMOO" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/splash_background</item>
+        <item name="android:windowSplashScreenBackground">@color/splash_background</item>
+    </style>
 </resources>

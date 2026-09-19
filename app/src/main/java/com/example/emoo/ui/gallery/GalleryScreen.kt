@@ -1,9 +1,14 @@
 package com.example.emoo.ui.gallery
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.provider.Settings
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,11 +24,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -60,6 +69,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.emoo.MultiWindowState
+import com.example.emoo.data.ImageRepository
 import com.example.emoo.data.MetaPreferences
 import com.example.emoo.model.ImageItem
 import com.example.emoo.model.SendMode
@@ -77,7 +87,7 @@ import kotlinx.coroutines.launch
  * 而是经无障碍服务一键发送到前台聊天应用：微信走“路径识别+自动点发送”，
  * QQ 走“模拟拖拽到聊天窗直接发送”（图片格子同时作为真手指长按拖拽的源）。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun GalleryScreen(
     viewModel: GalleryViewModel,
@@ -88,6 +98,7 @@ fun GalleryScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
 
     // 回到前台时重扫描，同步外部文件管理器的增删
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -102,6 +113,7 @@ fun GalleryScreen(
     // 交互状态
     var longPressImage by remember { mutableStateOf<ImageItem?>(null) }
     var deleteImageTarget by remember { mutableStateOf<ImageItem?>(null) }
+    var renameTarget by remember { mutableStateOf<ImageItem?>(null) }
     var deleteFolderTarget by remember { mutableStateOf<String?>(null) }
     var deleteFolderCount by remember { mutableIntStateOf(0) }
     var showCreateFolderDialog by remember { mutableStateOf(false) }
@@ -151,6 +163,15 @@ fun GalleryScreen(
         }
     }
 
+    /** 小窗点击文字：读取 .txt 全文复制到剪贴板（暂不做发送） */
+    fun copyTextToClipboard(image: ImageItem) {
+        scope.launch {
+            val full = ImageRepository.readTextFile(image.path)
+            clipboard.setPrimaryClip(ClipData.newPlainText("emoo_text", full))
+            snackbarHostState.showSnackbar(if (full.isNotBlank()) "已复制文字" else "文字内容为空")
+        }
+    }
+
     Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { padding ->
         Row(
             modifier = Modifier
@@ -158,73 +179,110 @@ fun GalleryScreen(
                 .padding(padding)
         ) {
             // 左侧 5/6：图片网格区（inMultiWindow 为可观察状态，进出小窗实时重组）
-            Box(modifier = Modifier.weight(5f)) {
-                val inMultiWindow = MultiWindowState.isInMultiWindow ||
-                    (context as? Activity)?.isInMultiWindowMode == true
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(state.gridColumns),
-                    contentPadding = PaddingValues(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    // 固定在最前面的“添加图片”卡片
-                    item(key = "__add_card__") {
-                        AddImageCard(onClick = onNavigateToImport)
-                    }
-                    itemsIndexed(state.images, key = { _, item -> item.path }) { index, image ->
-                        ImageGridItem(
-                            image = image,
-                            onClick = { center ->
-                                if (inMultiWindow) {
-                                    // 小窗/分屏：一键发送到前台聊天应用
-                                    if (ImageSender.isReady(context)) {
-                                        sendImage(image, center)
-                                    } else if (MetaPreferences.get(context)
-                                            .getSendMode() == SendMode.SHIZUKU
-                                    ) {
-                                        showShizukuGuide = true
-                                    } else {
-                                        showAccessibilityGuide = true
+            Column(modifier = Modifier.weight(5f)) {
+                // 搜索态：顶部文件名搜索栏（范围为全库，内存过滤）
+                if (state.searchActive) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = state.searchQuery,
+                            onValueChange = viewModel::setSearchQuery,
+                            singleLine = true,
+                            placeholder = { Text("搜索文件名") },
+                            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                            trailingIcon = {
+                                if (state.searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                                        Icon(Icons.Filled.Close, contentDescription = "清空")
                                     }
-                                } else {
-                                    onOpenImage(index)
                                 }
                             },
-                            // 小窗模式下长按拖拽是拖拽源（供模拟拖拽与真手指拖动），
-                            // 长按菜单弹窗会干扰拖拽会话，故小窗内禁用菜单
-                            onLongPress = {
-                                if (!inMultiWindow) longPressImage = image
-                            },
-                            dragSource = inMultiWindow
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = { viewModel.exitSearch() }) {
+                            Icon(Icons.Filled.Close, contentDescription = "退出搜索")
+                        }
+                    }
+                }
+                Box(modifier = Modifier.weight(1f)) {
+                    val inMultiWindow = MultiWindowState.isInMultiWindow ||
+                        (context as? Activity)?.isInMultiWindowMode == true
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(state.gridColumns),
+                        contentPadding = PaddingValues(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        // 固定在最前面的“添加图片”卡片
+                        item(key = "__add_card__") {
+                            AddImageCard(onClick = onNavigateToImport)
+                        }
+                        itemsIndexed(state.images, key = { _, item -> item.path }) { index, image ->
+                            ImageGridItem(
+                                image = image,
+                                onClick = { center ->
+                                    if (inMultiWindow) {
+                                        // 文字：暂不做发送，小窗点击仅复制全文
+                                        if (image.isText) {
+                                            copyTextToClipboard(image)
+                                        } else if (ImageSender.isReady(context)) {
+                                            // 小窗/分屏：一键发送到前台聊天应用
+                                            sendImage(image, center)
+                                        } else if (MetaPreferences.get(context)
+                                                .getSendMode() == SendMode.SHIZUKU
+                                        ) {
+                                            showShizukuGuide = true
+                                        } else {
+                                            showAccessibilityGuide = true
+                                        }
+                                    } else {
+                                        onOpenImage(index)
+                                    }
+                                },
+                                // 小窗模式下长按拖拽是拖拽源（供模拟拖拽与真手指拖动），
+                                // 长按菜单弹窗会干扰拖拽会话，故小窗内禁用菜单
+                                onLongPress = {
+                                    if (!inMultiWindow) longPressImage = image
+                                },
+                                // 文字不参与拖拽发送
+                                dragSource = inMultiWindow && !image.isText
+                            )
+                        }
+                    }
+
+                    // 空状态引导
+                    if (!state.loading && state.images.isEmpty()) {
+                        val hint = when {
+                            state.searchActive && state.searchQuery.isNotBlank() ->
+                                "没有文件名包含「${state.searchQuery}」的图片"
+                            state.folders.isEmpty() -> "还没有文件夹\n点击右下角 + 创建你的第一个文件夹"
+                            state.selectedFolder == null -> "暂无最近使用记录\n点击下方“导入”或网格首位的 + 添加图片"
+                            else -> "此文件夹暂无图片\n点击网格首位的 + 导入图片"
+                        }
+                        Text(
+                            text = hint,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(horizontal = 24.dp)
                         )
                     }
-                }
-
-                // 空状态引导
-                if (!state.loading && state.images.isEmpty()) {
-                    val hint = when {
-                        state.folders.isEmpty() -> "还没有文件夹\n点击右下角 + 创建你的第一个文件夹"
-                        state.selectedFolder == null -> "暂无最近使用记录\n点击下方“导入”或网格首位的 + 添加图片"
-                        else -> "此文件夹暂无图片\n点击网格首位的 + 导入图片"
+                    if (state.loading && state.images.isEmpty()) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.align(Alignment.Center)
+                        )
                     }
-                    Text(
-                        text = hint,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(horizontal = 24.dp)
-                    )
-                }
-                if (state.loading && state.images.isEmpty()) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
-                if (sending) {
-                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                    if (sending) {
+                        CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                    }
                 }
             }
 
@@ -239,7 +297,11 @@ fun GalleryScreen(
                     folders = state.folders,
                     selectedFolder = state.selectedFolder,
                     previewMap = state.previewMap,
+                    searchActive = state.searchActive,
                     onSelectFolder = { viewModel.selectFolder(it) },
+                    onToggleSearch = {
+                        if (state.searchActive) viewModel.exitSearch() else viewModel.enterSearch()
+                    },
                     onCreateFolder = { showCreateFolderDialog = true },
                     onLongPressFolder = { showReorderDialog = true },
                     onLongPressRecent = { showClearRecentConfirm = true },
@@ -252,13 +314,44 @@ fun GalleryScreen(
     // 长按图片：操作菜单（底部弹窗）
     longPressImage?.let { image ->
         ModalBottomSheet(onDismissRequest = { longPressImage = null }) {
+            if (!image.isText) {
+                ListItem(
+                    headlineContent = { Text("设为「${image.folderName}」的预览图") },
+                    leadingContent = { Icon(Icons.Filled.Image, contentDescription = null) },
+                    modifier = Modifier.clickable {
+                        viewModel.setFolderPreview(image)
+                        longPressImage = null
+                        scope.launch { snackbarHostState.showSnackbar("已设为文件夹预览图") }
+                    }
+                )
+            }
+            // 文件名条目：长按文件名可复制到剪贴板
             ListItem(
-                headlineContent = { Text("设为「${image.folderName}」的预览图") },
-                leadingContent = { Icon(Icons.Filled.Image, contentDescription = null) },
+                headlineContent = {
+                    Text(
+                        text = image.displayName,
+                        modifier = Modifier.combinedClickable(
+                            onClick = {},
+                            onLongClick = {
+                                clipboard.setPrimaryClip(
+                                    ClipData.newPlainText("emoo", image.displayName)
+                                )
+                                longPressImage = null
+                                scope.launch { snackbarHostState.showSnackbar("已复制文件名") }
+                            }
+                        )
+                    )
+                },
+                supportingContent = { Text("长按文件名可复制") },
+                leadingContent = { Icon(Icons.Filled.Description, contentDescription = null) }
+            )
+            ListItem(
+                headlineContent = { Text("重命名") },
+                supportingContent = { Text(image.displayName) },
+                leadingContent = { Icon(Icons.Filled.Edit, contentDescription = null) },
                 modifier = Modifier.clickable {
-                    viewModel.setFolderPreview(image)
+                    renameTarget = image
                     longPressImage = null
-                    scope.launch { snackbarHostState.showSnackbar("已设为文件夹预览图") }
                 }
             )
             ListItem(
@@ -273,6 +366,45 @@ fun GalleryScreen(
             // 底部留白，保证弹窗内容不完全贴底
             Box(Modifier.fillMaxWidth().padding(bottom = 24.dp))
         }
+    }
+
+    // 重命名图片：编辑文件名，同步更新 sha256 映射文件与“最近”记录
+    renameTarget?.let { image ->
+        var newName by remember(image.path) { mutableStateOf(image.displayName) }
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("重命名图片") },
+            text = {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    singleLine = true,
+                    label = { Text("文件名") },
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    enabled = newName.isNotBlank(),
+                    onClick = {
+                        val target = image
+                        val name = newName.trim()
+                        renameTarget = null
+                        viewModel.renameImage(target, name) { ok ->
+                            scope.launch {
+                                snackbarHostState.showSnackbar(
+                                    if (ok) "已重命名" else "重命名失败（重名或无效）"
+                                )
+                            }
+                        }
+                    }
+                ) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameTarget = null }) { Text("取消") }
+            }
+        )
     }
 
     // 删除单张图片：二次确认（真实文件删除，不可恢复）

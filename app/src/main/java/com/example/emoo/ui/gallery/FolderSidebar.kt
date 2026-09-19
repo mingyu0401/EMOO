@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -35,7 +36,7 @@ import coil3.compose.AsyncImage
 
 /**
  * 右侧 1/6 文件夹侧栏：
- * 顶部固定「最近」聚合入口，中间为真实文件夹列表（可滚动），
+ * 顶部固定「最近」聚合入口与「搜索」入口（第二项），中间为真实文件夹列表（可滚动），
  * 底部固定「+」新建文件夹入口。选中项高亮；长按真实文件夹弹出整理对话框
  * （上下排序 + 删除），长按顶部「最近」弹出清空确认（「最近」固定在顶部不可移动）。
  */
@@ -45,8 +46,10 @@ fun FolderSidebar(
     folders: List<String>,
     selectedFolder: String?,
     previewMap: Map<String, String>,
+    searchActive: Boolean,
     onSelectFolder: (String?) -> Unit,
     onCreateFolder: () -> Unit,
+    onToggleSearch: () -> Unit,
     onLongPressFolder: (String) -> Unit,
     onLongPressRecent: () -> Unit,
     modifier: Modifier = Modifier
@@ -61,9 +64,17 @@ fun FolderSidebar(
             label = "最近",
             previewUri = null,
             iconVector = Icons.Filled.History,
-            selected = selectedFolder == null,
+            selected = selectedFolder == null && !searchActive,
             onClick = { onSelectFolder(null) },
             onLongPress = onLongPressRecent
+        )
+        // 顶部固定第二项：搜索（进入/退出搜索态）
+        SidebarEntry(
+            label = "搜索",
+            previewUri = null,
+            iconVector = Icons.Filled.Search,
+            selected = searchActive,
+            onClick = onToggleSearch
         )
         HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
 

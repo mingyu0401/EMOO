@@ -1,7 +1,13 @@
 package com.example.emoo.ui.gallery
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,6 +19,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -21,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -29,12 +37,18 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.example.emoo.data.ImageRepository
+import com.example.emoo.model.ImageItem
+import java.io.File
 
 /**
  * 大图浏览页：左右滑动切换同列表图片（HorizontalPager），
@@ -49,6 +63,7 @@ fun ImageViewerScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val images = state.images
+    val context = LocalContext.current
     BackHandler(onBack = onBack)
 
     if (images.isEmpty()) {
@@ -144,21 +159,101 @@ fun ImageViewerScreen(
                 .weight(1f)
         ) { page ->
             val image = images[page]
-            AsyncImage(
-                model = image.uriString,
-                contentDescription = image.displayName,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clipToBounds()
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        translationX = offsetX
-                        translationY = offsetY
+            if (image.isText) {
+                TextReaderPage(image)
+            } else {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    AsyncImage(
+                        model = image.uriString,
+                        contentDescription = image.displayName,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clipToBounds()
+                            .graphicsLayer {
+                                scaleX = scale
+                                scaleY = scale
+                                translationX = offsetX
+                                translationY = offsetY
+                            }
+                            .transformable(transformableState)
+                    )
+                    // 视频：仅显示封面（首帧），不在应用内播放，提供外部应用打开入口
+                    if (image.isVideo) {
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "视频不在应用内播放",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+                            Button(onClick = { openVideoExternal(context, image) }) {
+                                Text("用其他应用打开")
+                            }
+                        }
                     }
-                    .transformable(transformableState)
+                }
+            }
+        }
+    }
+}
+
+/** 文字查看页：白底黑字可滚动显示全文，右下角提供"复制全文" */
+@Composable
+private fun TextReaderPage(image: ImageItem) {
+    val context = LocalContext.current
+    var content by remember(image.path) { mutableStateOf<String?>(null) }
+    LaunchedEffect(image.path) {
+        content = ImageRepository.readTextFile(image.path)
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.White)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp)
+        ) {
+            Text(
+                text = content?.takeIf { it.isNotBlank() } ?: if (content == null) "加载中…" else "（空）",
+                color = Color(0xDE000000),
+                fontSize = 16.sp,
+                lineHeight = 24.sp
             )
         }
+        Button(
+            onClick = {
+                val full = content.orEmpty()
+                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("emoo_text", full))
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp)
+        ) {
+            Text("复制全文")
+        }
+    }
+}
+
+/** 用外部应用打开视频：FileProvider uri + ACTION_VIEW + 读权限，不在应用内播放 */
+private fun openVideoExternal(context: Context, image: ImageItem) {
+    runCatching {
+        val uri = FileProvider.getUriForFile(
+            context, ImageRepository.FILE_PROVIDER_AUTHORITY, File(image.path)
+        )
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, ImageRepository.mimeOf(image.displayName))
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "用其他应用打开"))
     }
 }

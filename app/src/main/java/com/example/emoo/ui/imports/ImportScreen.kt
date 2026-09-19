@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Folder
@@ -78,6 +79,8 @@ fun ImportScreen() {
     val folders by viewModel.folders.collectAsStateWithLifecycle()
     val atFront by viewModel.atFront.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    var showTextDialog by remember { mutableStateOf(false) }
+    var textInput by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         viewModel.message.collect { snackbarHostState.showSnackbar(it) }
@@ -112,10 +115,11 @@ fun ImportScreen() {
                 ImportStep.PickSource -> SourceStep(
                     onPickImages = {
                         pickImagesLauncher.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
                         )
                     },
-                    onPickFolder = { pickFolderLauncher.launch(null) }
+                    onPickFolder = { pickFolderLauncher.launch(null) },
+                    onPickText = { textInput = ""; showTextDialog = true }
                 )
 
                 is ImportStep.PickImages -> ImagesStep(
@@ -138,6 +142,18 @@ fun ImportScreen() {
                     onCreateFolder = { name, onResult -> viewModel.createFolder(name, onResult) },
                     onStart = { folder -> viewModel.startImport(folder) }
                 )
+
+                is ImportStep.PickTextTarget -> TargetStep(
+                    folders = folders,
+                    selectedCount = current.texts.size,
+                    atFront = atFront,
+                    onSetAtFront = viewModel::setAtFront,
+                    onSelect = { },
+                    onBack = viewModel::goBack,
+                    onReload = viewModel::reloadFolders,
+                    onCreateFolder = { name, onResult -> viewModel.createFolder(name, onResult) },
+                    onStart = { folder -> viewModel.startTextImport(folder) }
+                )
             }
 
             if (loading) {
@@ -150,6 +166,46 @@ fun ImportScreen() {
             }
         }
     }
+
+    // 文字导入对话框：粘贴/输入多段文字，空行分隔，每段各存为一个 .txt
+    if (showTextDialog) {
+        AlertDialog(
+            onDismissRequest = { showTextDialog = false },
+            title = { Text("导入文字") },
+            text = {
+                Column {
+                    Text(
+                        "以空行分隔的段落将各存为一个 .txt 文件（一段话 = 一个文件）。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = textInput,
+                        onValueChange = { textInput = it },
+                        minLines = 6,
+                        maxLines = 12,
+                        placeholder = { Text("在此输入或粘贴文字…") },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = textInput.isNotBlank(),
+                    onClick = {
+                        showTextDialog = false
+                        viewModel.onTextSubmitted(textInput)
+                    }
+                ) { Text("下一步") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTextDialog = false }) { Text("取消") }
+            }
+        )
+    }
 }
 
 // ---------------- 第一步：选择来源 ----------------
@@ -157,7 +213,8 @@ fun ImportScreen() {
 @Composable
 private fun SourceStep(
     onPickImages: () -> Unit,
-    onPickFolder: () -> Unit
+    onPickFolder: () -> Unit,
+    onPickText: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -167,26 +224,26 @@ private fun SourceStep(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "导入图片",
+            text = "导入图片 / 视频",
             style = MaterialTheme.typography.headlineSmall,
             modifier = Modifier.padding(top = 16.dp, bottom = 6.dp)
         )
         Text(
-            text = "图片将以复制方式导入所选文件夹，保留原文件名",
+            text = "将以复制方式导入所选文件夹，保留原文件名",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
         Text(
-            text = "过大的 GIF（5MB 以上）会被压缩以减少发送失败的可能性",
+            text = "过大的 GIF（5MB 以上）会被压缩以减少发送失败的可能性；视频原样导入，不压缩",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 4.dp)
         )
         SourceCard(
-            title = "按图片导入",
-            description = "通过系统图片选择器多选若干张图片（jpg/png/gif）",
+            title = "按图片/视频导入",
+            description = "通过系统选择器多选若干图片或视频",
             icon = Icons.Filled.Image,
             modifier = Modifier
                 .fillMaxWidth()
@@ -195,12 +252,21 @@ private fun SourceStep(
         )
         SourceCard(
             title = "按文件夹导入",
-            description = "选择一个外部文件夹，列出其中所有图片供勾选",
+            description = "选择一个外部文件夹，列出其中所有图片/视频供勾选",
             icon = Icons.Filled.FolderOpen,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 16.dp),
             onClick = onPickFolder
+        )
+        SourceCard(
+            title = "导入文字",
+            description = "粘贴若干段文字，每段各存为一个 .txt 文件",
+            icon = Icons.Filled.Article,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 16.dp),
+            onClick = onPickText
         )
     }
 }

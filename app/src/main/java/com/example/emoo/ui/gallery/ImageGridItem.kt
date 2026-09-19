@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -44,6 +45,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -112,15 +114,10 @@ fun ImageGridItem(
                                 val uri = FileProvider.getUriForFile(
                                     context, ImageRepository.FILE_PROVIDER_AUTHORITY, file
                                 )
-                                // 显式声明 image/* MIME（对齐系统相册的拖拽载荷）：
+                                // 显式声明 MIME（对齐系统相册的拖拽载荷）：
                                 // ClipData.newUri 依赖 resolver 反查类型，微信对类型缺失/
-                                // 不明确的载荷会拒收，导致拖入后不发送
-                                val mime = when (file.extension.lowercase()) {
-                                    "png" -> "image/png"
-                                    "gif" -> "image/gif"
-                                    "webp" -> "image/webp"
-                                    else -> "image/jpeg"
-                                }
+                                // 不明确的载荷会拒收，导致拖入后不发送。图片/视频统一按扩展名推断
+                                val mime = ImageRepository.mimeOf(file.name)
                                 val clip = ClipData(file.name, arrayOf(mime), ClipData.Item(uri))
                                 view.startDragAndDrop(
                                     clip,
@@ -147,17 +144,40 @@ fun ImageGridItem(
                 }
             )
     ) {
-        AsyncImage(
-            model = image.uriString,
-            contentDescription = image.displayName,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
-            placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceContainerHighest),
-            error = rememberVectorPainter(Icons.Filled.BrokenImage)
-        )
-        if (image.isGif) {
+        if (image.isText) {
+            // 文字文件：纸面卡片显示正文前缀 + 省略号（非图片）
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(8.dp)
+            ) {
+                Text(
+                    text = (image.previewText?.takeIf { it.isNotBlank() } ?: "（空）") + "…",
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 5,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        } else {
+            AsyncImage(
+                model = image.uriString,
+                contentDescription = image.displayName,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+                placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceContainerHighest),
+                error = rememberVectorPainter(Icons.Filled.BrokenImage)
+            )
+        }
+        if (image.isGif || image.isVideo || image.isText) {
             Text(
-                text = "GIF",
+                text = when {
+                    image.isText -> "TEXT"
+                    image.isVideo -> "VIDEO"
+                    else -> "GIF"
+                },
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White,

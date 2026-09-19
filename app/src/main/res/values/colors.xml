@@ -7,4 +7,6 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <!-- 启动预览（starting window）底色：浅色白、深色由 values-night 覆盖 -->
+    <color name="splash_background">#FFFFFFFF</color>
 </resources>

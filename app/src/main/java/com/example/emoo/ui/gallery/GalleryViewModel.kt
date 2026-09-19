@@ -1,6 +1,7 @@
 package com.example.emoo.ui.gallery
 
 import android.app.Application
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.emoo.data.ImageRepository
@@ -27,17 +28,34 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val gridColumns: Int = 4,
         /** 文件夹名 -> 预览图 uriString（供侧栏加载） */
         val previewMap: Map<String, String> = emptyMap(),
-        val loading: Boolean = true
+        val loading: Boolean = true,
+        /** 搜索态：images 为全库按文件名过滤后的结果 */
+        val searchActive: Boolean = false,
+        val searchQuery: String = ""
     )
 
     private val meta = MetaPreferences.get(application)
     private val context get() = getApplication<Application>()
+
+    /** 搜索态下的全库图片缓存：输入关键字时只在内存过滤，不重复扫盘 */
+    private var searchBase: List<ImageItem> = emptyList()
 
     private val _state = MutableStateFlow(GalleryState(gridColumns = meta.getGridColumns()))
     val state: StateFlow<GalleryState> = _state.asStateFlow()
 
     init {
         refresh()
+        ensureHashMaps()
+    }
+
+    /** 启动时后台静默补全缺失的 sha256 映射文件；确有生成时提示用户 */
+    private fun ensureHashMaps() {
+        viewModelScope.launch {
+            val generated = ImageRepository.ensureHashMaps(context)
+            if (generated) {
+                Toast.makeText(context, "已悄悄完成文件优化", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     /** 重新扫描目录（进入前台、增删后调用），保证与文件系统一致 */
@@ -46,7 +64,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             _state.update { it.copy(loading = true) }
             val folders = orderedFolders(ImageRepository.listFolders(context))
             val selected = _state.value.selectedFolder?.takeIf { it in folders }
-            val images = if (selected == null) {
+            val images = if (_state.value.searchActive) {
+                val base = ImageRepository.listImages(context, null)
+                searchBase = base
+                applyQuery(base, _state.value.searchQuery)
+            } else if (selected == null) {
                 resolveRecentImages()
             } else {
                 ImageRepository.listImages(context, selected)
@@ -66,6 +88,32 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
+
+    /** 进入搜索态：全库图片为范围，按文件名过滤 */
+    fun enterSearch() {
+        viewModelScope.launch {
+            val base = ImageRepository.listImages(context, null)
+            searchBase = base
+            _state.update {
+                it.copy(searchActive = true, searchQuery = "", images = base, loading = false)
+            }
+        }
+    }
+
+    /** 退出搜索态，恢复之前的文件夹视图 */
+    fun exitSearch() {
+        _state.update { it.copy(searchActive = false, searchQuery = "") }
+        refresh()
+    }
+
+    /** 更新搜索关键字（内存过滤，不扫盘） */
+    fun setSearchQuery(query: String) {
+        _state.update { it.copy(searchQuery = query, images = applyQuery(searchBase, query)) }
+    }
+
+    private fun applyQuery(base: List<ImageItem>, query: String): List<ImageItem> =
+        if (query.isBlank()) base
+        else base.filter { it.displayName.contains(query, ignoreCase = true) }
 
     /** 将“最近”记录解析为真实存在的图片（失效记录顺带清理），按时间倒序，上限 100 */
     private suspend fun resolveRecentImages(): List<ImageItem> {
@@ -156,6 +204,33 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun setFolderPreview(image: ImageItem) {
         meta.setFolderPreview(image.folderName, image.path, image.uriString)
         _state.update { it.copy(previewMap = it.previewMap + (image.folderName to image.uriString)) }
+    }
+
+    /**
+     * 长按图片 -> 重命名。文件改名与 sha256 映射文件由 Repository 同步更新，
+     * 这里顺带修正“最近”记录与文件夹预览图中指向旧路径的条目。
+     */
+    fun renameImage(image: ImageItem, newName: String, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val renamed = ImageRepository.renameImage(context, image, newName)
+            if (renamed != null) {
+                val recent = meta.getRecent()
+                if (recent.any { it.path == image.path }) {
+                    meta.saveRecent(recent.map {
+                        if (it.path == image.path) {
+                            it.copy(path = renamed.path, name = renamed.displayName)
+                        } else {
+                            it
+                        }
+                    })
+                }
+                if (meta.getFolderPreviews()[image.folderName]?.first == image.path) {
+                    meta.setFolderPreview(image.folderName, renamed.path, renamed.uriString)
+                }
+                refresh()
+            }
+            onResult(renamed != null)
+        }
     }
 
     /** 真实删除单张图片，并从“最近”移除；若它是文件夹预览图则回退默认图标 */

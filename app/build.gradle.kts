@@ -85,6 +85,7 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.coil.compose)
     implementation(libs.coil.gif)
+    implementation(libs.coil.video)
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)
     testImplementation(libs.junit)

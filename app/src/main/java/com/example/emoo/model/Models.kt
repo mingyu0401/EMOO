@@ -38,9 +38,24 @@ data class ImageItem(
     val displayName: String,
     val folderName: String,
     val addedTime: Long,
-    val size: Long
+    val size: Long,
+    /** 文字文件（.txt）正文前缀，供网格卡片显示；图片/视频为 null */
+    val previewText: String? = null
 ) {
     val isGif: Boolean get() = displayName.endsWith(".gif", ignoreCase = true)
+    val isVideo: Boolean
+        get() = displayName.substringAfterLast('.', "").lowercase() in VIDEO_EXTENSIONS
+    val isText: Boolean
+        get() = displayName.substringAfterLast('.', "").lowercase() in TEXT_EXTENSIONS
+
+    companion object {
+        /** 受支持的视频扩展名（导入不压缩，网格显示封面，查看页仅外部打开） */
+        val VIDEO_EXTENSIONS = setOf(
+            "mp4", "mkv", "webm", "mov", "m4v", "3gp", "avi", "wmv", "flv", "ts"
+        )
+        /** 文字文件扩展名（一段话=一个文件，网格显示正文前缀） */
+        val TEXT_EXTENSIONS = setOf("txt")
+    }
 }
 
 /** “最近”聚合视图中的单条记录 */

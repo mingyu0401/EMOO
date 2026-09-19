@@ -21,6 +21,7 @@ import coil3.compose.setSingletonImageLoaderFactory
 import coil3.gif.AnimatedImageDecoder
 import coil3.gif.GifDecoder
 import coil3.memory.MemoryCache
+import coil3.video.VideoFrameDecoder
 import com.example.emoo.model.ThemeMode
 import com.example.emoo.send.ImageSender
 import com.example.emoo.ui.EMOOApp
@@ -87,7 +88,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** 图片加载器：GIF 实时循环播放 + 内存缓存（20%）+ 默认磁盘缓存 */
+/** 图片加载器：GIF 实时循环播放 + 视频首帧封面 + 内存缓存（20%）+ 默认磁盘缓存 */
 private fun buildEmooImageLoader(context: Context): ImageLoader =
     ImageLoader.Builder(context)
         .components {
@@ -96,6 +97,8 @@ private fun buildEmooImageLoader(context: Context): ImageLoader =
             } else {
                 add(GifDecoder.Factory())
             }
+            // 视频取首帧作封面（不播放），网格与查看页共用
+            add(VideoFrameDecoder.Factory())
         }
         .memoryCache {
             MemoryCache.Builder()

@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.security.MessageDigest
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -30,15 +31,59 @@ object ImageRepository {
     /** FileProvider authority（剪贴板分享图片给聊天应用） */
     const val FILE_PROVIDER_AUTHORITY = "com.example.emoo.fileprovider"
 
-    private val SUPPORTED_EXTENSIONS = setOf("jpg", "jpeg", "png", "gif")
-    private val SUPPORTED_MIME_TYPES = setOf("image/jpeg", "image/png", "image/gif")
+    private val SUPPORTED_IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "gif")
+    private val SUPPORTED_VIDEO_EXTENSIONS = ImageItem.VIDEO_EXTENSIONS
+    private val SUPPORTED_TEXT_EXTENSIONS = ImageItem.TEXT_EXTENSIONS
+    private val SUPPORTED_MIME_TYPES = setOf(
+        "image/jpeg", "image/png", "image/gif",
+        "video/mp4", "video/webm", "video/x-matroska", "video/quicktime",
+        "video/3gpp", "video/x-msvideo", "video/mpeg"
+    )
+
+    /** 网格文字卡片显示的正文前缀长度 */
+    private const val TEXT_PREVIEW_CHARS = 60
+    /** 查看页读取全文的字节上限（防御超大文件） */
+    private const val TEXT_READ_MAX_BYTES = 1 shl 20
+
+    /** 文件夹内 sha256↔文件名 映射文件名（点开头隐藏，扩展名不受支持故不会进网格） */
+    private const val HASH_FILE_NAME = ".emoo_sha256"
 
     fun getRootDir(context: Context): File =
         File(context.getExternalFilesDir(null) ?: context.filesDir, "pictures")
 
     /** 文件名是否为受支持的图片格式（jpg/jpeg/png/gif） */
     fun isSupportedImage(name: String): Boolean =
-        name.substringAfterLast('.', "").lowercase() in SUPPORTED_EXTENSIONS
+        name.substringAfterLast('.', "").lowercase() in SUPPORTED_IMAGE_EXTENSIONS
+
+    /** 文件名是否为受支持的视频格式 */
+    fun isSupportedVideo(name: String): Boolean =
+        name.substringAfterLast('.', "").lowercase() in SUPPORTED_VIDEO_EXTENSIONS
+
+    /** 文件名是否为受支持的文字格式（.txt） */
+    fun isSupportedText(name: String): Boolean =
+        name.substringAfterLast('.', "").lowercase() in SUPPORTED_TEXT_EXTENSIONS
+
+    /** 文件名是否为受支持的媒体（图片、视频或文字）——扫描/聚合视图用 */
+    fun isSupportedMedia(name: String): Boolean =
+        isSupportedImage(name) || isSupportedVideo(name) || isSupportedText(name)
+
+    /** 按扩展名推断 MIME（图片/视频），未知回退 image/jpeg。拖拽、临时文件、外部打开共用 */
+    fun mimeOf(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+        "png" -> "image/png"
+        "gif" -> "image/gif"
+        "webp" -> "image/webp"
+        "jpg", "jpeg" -> "image/jpeg"
+        "mp4", "m4v" -> "video/mp4"
+        "mkv" -> "video/x-matroska"
+        "webm" -> "video/webm"
+        "mov" -> "video/quicktime"
+        "3gp" -> "video/3gpp"
+        "avi" -> "video/x-msvideo"
+        "ts", "mpeg", "mpg" -> "video/mpeg"
+        "wmv" -> "video/x-ms-wmv"
+        "flv" -> "video/x-flv"
+        else -> "image/jpeg"
+    }
 
     /** 过滤非法字符并校验文件夹名，非法返回 null */
     fun sanitizeFolderName(raw: String): String? {
@@ -55,8 +100,33 @@ object ImageRepository {
         displayName = name,
         folderName = parentFile?.name ?: "",
         addedTime = lastModified(),
-        size = length()
+        size = length(),
+        previewText = if (isSupportedText(name)) textPreview() else null
     )
+
+    /** 读取 .txt 正文前缀（压缩空白、限长），供网格卡片显示；失败返回空串 */
+    private fun File.textPreview(): String = runCatching {
+        inputStream().use { readTextPreview(it, TEXT_PREVIEW_CHARS) }
+    }.getOrDefault("")
+
+    /** 从输入流读取并规范化文字预览：UTF-8 解码、连续空白压成单空格、限长 */
+    private fun readTextPreview(input: java.io.InputStream, maxChars: Int): String {
+        val bytes = input.readNBytes(4096)
+        val collapsed = String(bytes, Charsets.UTF_8)
+            .replace("\uFFFD", "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        return if (collapsed.length > maxChars) collapsed.take(maxChars) else collapsed
+    }
+
+    /** 读取文字文件全文（查看页/复制用），上限 [TEXT_READ_MAX_BYTES] 字节 */
+    suspend fun readTextFile(path: String): String = withContext(Dispatchers.IO) {
+        runCatching {
+            File(path).inputStream().use { input ->
+                String(input.readNBytes(TEXT_READ_MAX_BYTES), Charsets.UTF_8)
+            }
+        }.getOrDefault("")
+    }
 
     // ================================ 目录扫描 ================================
 
@@ -88,7 +158,7 @@ object ImageRepository {
             } catch (_: Exception) {
                 return@withContext emptyList()
             }
-            files.filter { isSupportedImage(it.name) }
+            files.filter { isSupportedMedia(it.name) }
                 .sortedByDescending { it.lastModified() }
                 .map { it.toImageItem() }
         }
@@ -121,13 +191,57 @@ object ImageRepository {
             deleted
         }
 
-    /** 真实删除单张图片，返回是否成功 */
+    /** 真实删除单张图片，返回是否成功；顺带清理映射文件中对应记录 */
     suspend fun deleteImage(context: Context, image: ImageItem): Boolean =
         withContext(Dispatchers.IO) {
             try {
-                File(image.path).delete()
+                val file = File(image.path)
+                val ok = file.delete()
+                if (ok) {
+                    file.parentFile?.let { dir ->
+                        val map = readHashMap(dir)
+                        val key = map.entries.firstOrNull { it.value == file.name }?.key
+                        if (key != null) {
+                            map.remove(key)
+                            writeHashMap(dir, map)
+                        }
+                    }
+                }
+                ok
             } catch (_: Exception) {
                 false
+            }
+        }
+
+    /**
+     * 重命名图片文件，并同步更新文件夹内 sha256↔文件名 映射文件
+     * （旧记录改名；无记录的老导入补算 sha256 后写入）。扩展名强制保留，
+     * 避免破坏格式识别与发送侧 MIME 判断。成功返回新 ImageItem。
+     */
+    suspend fun renameImage(context: Context, image: ImageItem, rawName: String): ImageItem? =
+        withContext(Dispatchers.IO) {
+            try {
+                val old = File(image.path)
+                val dir = old.parentFile ?: return@withContext null
+                var name = rawName.trim().replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                if (name.isEmpty() || name == "." || name == "..") return@withContext null
+                val oldExt = old.name.substringAfterLast('.', "")
+                if (oldExt.isNotEmpty() && !name.substringAfterLast('.', "").equals(oldExt, true)) {
+                    name = "$name.$oldExt"
+                }
+                if (name != old.name) {
+                    val target = File(dir, name)
+                    if (target.exists() || !old.renameTo(target)) return@withContext null
+                }
+                val finalFile = File(dir, name)
+                val map = readHashMap(dir)
+                val key = map.entries.firstOrNull { it.value == old.name }?.key
+                    ?: finalFile.sha256Hex()
+                if (key != null) map[key] = name
+                writeHashMap(dir, map)
+                finalFile.toImageItem()
+            } catch (_: Exception) {
+                null
             }
         }
 
@@ -162,8 +276,58 @@ object ImageRepository {
             }
             onProgress(index + 1, candidates.size, finalName)
         }
-        if (imported.isNotEmpty()) applyImportPosition(imported, existingFiles, atFront)
+        if (imported.isNotEmpty()) {
+            applyImportPosition(imported, existingFiles, atFront)
+            recordHashes(dir, imported)
+        }
         imported
+    }
+
+    /**
+     * 将多段文字各写为一个 .txt 文件到目标文件夹（一段话 = 一个文件），
+     * 复用唯一名、导入位置与 sha256 映射记录。文件名取段落首行前缀。
+     * 协程取消时抛 CancellationException，已写入的文件保留。
+     */
+    suspend fun importTexts(
+        context: Context,
+        paragraphs: List<String>,
+        targetFolder: String,
+        atFront: Boolean = true,
+        onProgress: (current: Int, total: Int, fileName: String) -> Unit
+    ): List<ImageItem> = withContext(Dispatchers.IO) {
+        val dir = File(getRootDir(context), targetFolder)
+        dir.mkdirs()
+        val existingFiles = dir.listFiles()?.filter { it.isFile } ?: emptyList()
+        val existing = mutableSetOf<String>().apply { existingFiles.forEach { add(it.name.lowercase()) } }
+        val imported = mutableListOf<ImageItem>()
+        paragraphs.forEachIndexed { index, text ->
+            coroutineContext.ensureActive()
+            val finalName = uniqueName(textFileName(text), existing)
+            existing.add(finalName.lowercase())
+            try {
+                File(dir, finalName).writeText(text)
+                imported.add(File(dir, finalName).toImageItem())
+            } catch (_: Exception) {
+            }
+            onProgress(index + 1, paragraphs.size, finalName)
+        }
+        if (imported.isNotEmpty()) {
+            applyImportPosition(imported, existingFiles, atFront)
+            recordHashes(dir, imported)
+        }
+        imported
+    }
+
+    /** 由文字段落生成 .txt 文件名：取首行去非法字符、限长，兜底“文字” */
+    private fun textFileName(text: String): String {
+        val firstLine = text.trim().lines().firstOrNull().orEmpty()
+        val base = firstLine
+            .replace(Regex("[\\\\/:*?\"<>|]"), "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .take(20)
+            .ifBlank { "文字" }
+        return "$base.txt"
     }
 
     /** 改写新导入文件的 lastModified，使其排在现有文件之前或之后 */
@@ -234,6 +398,75 @@ object ImageRepository {
 
     // ================================ 工具 ================================
 
+    /** 流式计算文件内容 SHA-256（十六进制小写），失败返回 null */
+    private fun File.sha256Hex(): String? = runCatching {
+        val digest = MessageDigest.getInstance("SHA-256")
+        inputStream().use { input ->
+            val buf = ByteArray(8192)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                digest.update(buf, 0, n)
+            }
+        }
+        digest.digest().joinToString("") { "%02x".format(it) }
+    }.getOrNull()
+
+    /** 把新导入文件的 sha256↔文件名 合并写入文件夹内映射文件 */
+    private fun recordHashes(dir: File, items: List<ImageItem>) {
+        val map = readHashMap(dir)
+        items.forEach { item ->
+            File(item.path).sha256Hex()?.let { map[it] = item.displayName }
+        }
+        writeHashMap(dir, map)
+    }
+
+    /**
+     * 启动时补全映射文件：遍历所有文件夹，缺少 `.emoo_sha256` 的静默计算其内全部
+     * 图片 sha256 并写入（空文件夹跳过）。返回是否有文件夹被新生成，供调用方决定是否提示。
+     */
+    suspend fun ensureHashMaps(context: Context): Boolean = withContext(Dispatchers.IO) {
+        var generated = false
+        try {
+            getRootDir(context).listFiles { file -> file.isDirectory }?.forEach { dir ->
+                if (File(dir, HASH_FILE_NAME).exists()) return@forEach
+                val images = dir.listFiles()?.filter { it.isFile && isSupportedMedia(it.name) }
+                    ?: return@forEach
+                if (images.isEmpty()) return@forEach
+                val map = LinkedHashMap<String, String>()
+                images.forEach { f -> f.sha256Hex()?.let { map[it] = f.name } }
+                if (map.isNotEmpty()) {
+                    writeHashMap(dir, map)
+                    generated = true
+                }
+            }
+        } catch (_: Exception) {
+        }
+        generated
+    }
+
+    /** 读取映射文件（每行 `<sha256hex> <文件名>`；sha 定长 64 位，按首个空格切分） */
+    private fun readHashMap(dir: File): LinkedHashMap<String, String> {
+        val map = LinkedHashMap<String, String>()
+        val file = File(dir, HASH_FILE_NAME)
+        if (!file.exists()) return map
+        runCatching {
+            file.readLines().forEach { line ->
+                val idx = line.indexOf(' ')
+                if (idx > 0) map[line.substring(0, idx)] = line.substring(idx + 1)
+            }
+        }
+        return map
+    }
+
+    private fun writeHashMap(dir: File, map: Map<String, String>) {
+        runCatching {
+            File(dir, HASH_FILE_NAME).writeText(
+                map.entries.joinToString("\n") { (sha, name) -> "$sha $name" }
+            )
+        }
+    }
+
     /** 查询 content uri 的显示名（用于 Photo Picker 结果） */
     fun displayNameOf(context: Context, uri: Uri): String? {
         return try {
@@ -257,7 +490,8 @@ object ImageRepository {
             if (!file.isFile) return@mapNotNull null
             val name = file.name ?: return@mapNotNull null
             val mime = file.type
-            val supported = isSupportedImage(name) || mime in SUPPORTED_MIME_TYPES
+            val supported = isSupportedImage(name) || isSupportedVideo(name) ||
+                mime in SUPPORTED_MIME_TYPES
             if (supported) ImportCandidate(file.uri, name) else null
         }.sortedBy { it.name.lowercase() }
     }
