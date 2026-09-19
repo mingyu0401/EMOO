@@ -90,7 +90,7 @@ fun SettingsScreen(settingsViewModel: SettingsViewModel) {
     val versionName = remember {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        }.getOrNull() ?: "0.93"
+        }.getOrNull() ?: "0.94"
     }
 
     // 版本号彩蛋状态
@@ -253,13 +253,13 @@ fun SettingsScreen(settingsViewModel: SettingsViewModel) {
                     }
                 },
                 supportingContent = {
-                    when {
-                        !ShizukuDragInjector.binderAlive() -> Text(
+                    val shizukuHint = when {
+                        !ShizukuDragInjector.binderAlive() ->
                             "当前 Shizuku 模式下无法发送。请在 Shizuku 应用中启动服务，或切换为无障碍方式"
-                        )
-                        shizukuReady -> Text("QQ 拖拽与微信发送将全程经 Shizuku shell 通道实现")
-                        else -> Text("点击右侧按钮，在弹出的 Shizuku 窗口中允许本应用")
+                        shizukuReady -> "QQ 拖拽与微信发送将全程经 Shizuku shell 通道实现"
+                        else -> "点击右侧按钮，在弹出的 Shizuku 窗口中允许本应用"
                     }
+                    Text("$shizukuHint\n版本推荐 github.com/thedjchi/Shizuku 最新版")
                 },
                 leadingContent = { Icon(Icons.Filled.SwapHoriz, contentDescription = null) },
                 trailingContent = {
