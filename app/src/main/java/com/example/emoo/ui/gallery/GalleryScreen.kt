@@ -337,9 +337,8 @@ fun GalleryScreen(
                     previewMap = state.previewMap,
                     searchActive = state.searchActive,
                     onSelectFolder = { viewModel.selectFolder(it) },
-                    onToggleSearch = {
-                        if (state.searchActive) viewModel.exitSearch() else viewModel.enterSearch()
-                    },
+                    // 「搜索」入口只负责进入：连点停留在搜索页，退出走搜索栏旁的关闭按钮
+                    onEnterSearch = { viewModel.enterSearch() },
                     onCreateFolder = { showCreateFolderDialog = true },
                     onLongPressFolder = { folder ->
                         sortFolderTarget = folder

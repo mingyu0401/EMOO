@@ -38,7 +38,8 @@ import coil3.compose.AsyncImage
  * 右侧 1/6 文件夹侧栏：
  * 顶部固定「最近」聚合入口与「搜索」入口（第二项），中间为真实文件夹列表（可滚动），
  * 底部固定「+」新建文件夹入口。选中项高亮且同一时刻只有一项高亮
- * （进入搜索态时文件夹/最近均取消选中）；长按真实文件夹弹出整理对话框
+ * （进入搜索态时文件夹/最近均取消选中）；「搜索」点击只进入不退出
+ * （连点停留在搜索页，退出走搜索栏旁的关闭按钮）；长按真实文件夹弹出整理对话框
  * （上下排序 + 删除），长按顶部「最近」弹出清空确认（「最近」固定在顶部不可移动）。
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -50,7 +51,7 @@ fun FolderSidebar(
     searchActive: Boolean,
     onSelectFolder: (String?) -> Unit,
     onCreateFolder: () -> Unit,
-    onToggleSearch: () -> Unit,
+    onEnterSearch: () -> Unit,
     onLongPressFolder: (String) -> Unit,
     onLongPressRecent: () -> Unit,
     modifier: Modifier = Modifier
@@ -69,13 +70,13 @@ fun FolderSidebar(
             onClick = { onSelectFolder(null) },
             onLongPress = onLongPressRecent
         )
-        // 顶部固定第二项：搜索（进入/退出搜索态）
+        // 顶部固定第二项：搜索（只进入，不随连点退出）
         SidebarEntry(
             label = "搜索",
             previewUri = null,
             iconVector = Icons.Filled.Search,
             selected = searchActive,
-            onClick = onToggleSearch
+            onClick = onEnterSearch
         )
         HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
 

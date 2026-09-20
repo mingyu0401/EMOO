@@ -170,8 +170,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     /** 进入搜索态：同步切换到空白搜索界面（状态即时翻转，连点不会与异步刷新互相覆盖），
      * 再后台扫全库供关键字过滤；扫描完成时若已输入关键字则补一次过滤。
-     * 同时清空文件夹选中，保证侧栏只有「搜索」一项高亮 */
+     * 同时清空文件夹选中，保证侧栏只有「搜索」一项高亮。
+     * 已在搜索态时点击「搜索」不产生任何变化（退出只走搜索栏旁的关闭按钮），
+     * 避免连点时在搜索与最近之间来回切换 */
     fun enterSearch() {
+        if (_state.value.searchActive) return
         val token = ++searchToken
         ++refreshToken // 作废进行中的刷新结果，避免其稍后覆盖搜索态列表
         _state.update {
