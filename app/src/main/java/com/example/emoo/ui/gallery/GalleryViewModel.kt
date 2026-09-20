@@ -49,6 +49,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /** 搜索态下的全库图片缓存：输入关键字时只在内存过滤，不重复扫盘 */
     private var searchBase: List<ImageItem> = emptyList()
 
+    /** 进入搜索的后台扫盘任务与其令牌：连点搜索时丢弃过期扫描结果，防止与刷新互相覆盖 */
+    private var searchScanJob: kotlinx.coroutines.Job? = null
+    private var searchToken = 0
+
     /** 刷新令牌：异步刷新只写回自己那一代的结果，防连点切文件夹时旧结果覆盖新结果 */
     private var refreshToken = 0
 
@@ -164,27 +168,40 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    /** 进入搜索态：扫全库备用，但列表初始为空白，输入关键字后展示过滤结果。
+    /** 进入搜索态：同步切换到空白搜索界面（状态即时翻转，连点不会与异步刷新互相覆盖），
+     * 再后台扫全库供关键字过滤；扫描完成时若已输入关键字则补一次过滤。
      * 同时清空文件夹选中，保证侧栏只有「搜索」一项高亮 */
     fun enterSearch() {
-        viewModelScope.launch {
+        val token = ++searchToken
+        ++refreshToken // 作废进行中的刷新结果，避免其稍后覆盖搜索态列表
+        _state.update {
+            it.copy(
+                searchActive = true,
+                searchQuery = "",
+                selectedFolder = null,
+                images = emptyList(),
+                folderSort = null,
+                loading = false
+            )
+        }
+        searchBase = emptyList()
+        searchScanJob?.cancel()
+        searchScanJob = viewModelScope.launch {
             val base = ImageRepository.listImages(context, null)
+            if (token != searchToken || !_state.value.searchActive) return@launch
             searchBase = base
             _state.update {
-                it.copy(
-                    searchActive = true,
-                    searchQuery = "",
-                    selectedFolder = null,
-                    images = emptyList(),
-                    folderSort = null,
-                    loading = false
-                )
+                if (it.searchActive && it.searchQuery.isNotBlank())
+                    it.copy(images = applyQuery(base, it.searchQuery))
+                else it
             }
         }
     }
 
-    /** 退出搜索态，恢复之前的文件夹视图 */
+    /** 退出搜索态：作废进行中的搜索扫描，同步翻转标记后恢复之前的文件夹视图 */
     fun exitSearch() {
+        ++searchToken
+        searchScanJob?.cancel()
         _state.update { it.copy(searchActive = false, searchQuery = "") }
         refresh()
     }
