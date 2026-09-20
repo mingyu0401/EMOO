@@ -90,7 +90,7 @@ fun SettingsScreen(settingsViewModel: SettingsViewModel) {
     val versionName = remember {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        }.getOrNull() ?: "0.94"
+        }.getOrNull() ?: "1.0"
     }
 
     // 版本号彩蛋状态

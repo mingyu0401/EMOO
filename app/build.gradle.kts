@@ -28,8 +28,8 @@ android {
         applicationId = "com.example.emoo"
         minSdk = 26
         targetSdk = 36
-        versionCode = 94
-        versionName = "0.94"
+        versionCode = 100
+        versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
