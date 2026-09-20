@@ -7,23 +7,33 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FolderShared
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Tag
@@ -31,6 +41,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -51,6 +62,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
@@ -61,22 +73,26 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.emoo.data.ImageRepository
 import com.example.emoo.model.SendMode
+import com.example.emoo.model.ThemeColor
 import com.example.emoo.model.ThemeMode
 import com.example.emoo.send.ShizukuDragInjector
 import com.example.emoo.service.PasteAccessibilityService
 import com.example.emoo.ui.ModeTutorialDialog
+import com.example.emoo.ui.theme.themeColorSwatch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.system.exitProcess
 
 /**
- * 设置页：深色模式三档（即时生效）、每行图片个数（2~6，即时重排版）、
+ * 设置页：深色模式三档与主题色（各自收入二级菜单，即时生效；右上角圆圈按钮进主题色页）、
+ * 每行图片个数（2~6，即时重排版）、
  * 清理“最近”记录（确认 + Snackbar 撤销）、图片根目录（点击复制）、
  * 关于、版本号彩蛋（连点 10 次触发 5 秒倒计时“boom”弹窗后强制退出）。
  */
 @Composable
 fun SettingsScreen(settingsViewModel: SettingsViewModel) {
     val themeMode by settingsViewModel.themeMode.collectAsStateWithLifecycle()
+    val themeColor by settingsViewModel.themeColor.collectAsStateWithLifecycle()
     val gridColumns by settingsViewModel.gridColumns.collectAsStateWithLifecycle()
     val sendMode by settingsViewModel.sendMode.collectAsStateWithLifecycle()
     val showUsageCount by settingsViewModel.showUsageCount.collectAsStateWithLifecycle()
@@ -86,11 +102,17 @@ fun SettingsScreen(settingsViewModel: SettingsViewModel) {
     var showClearRecentConfirm by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
     var showTutorial by remember { mutableStateOf(false) }
+    // 二级菜单：null = 主列表；深色模式 / 主题色各自成页
+    var subPage by remember { mutableStateOf<SettingsSubPage?>(null) }
+    BackHandler(enabled = subPage != null) { subPage = null }
+    // 当前是否处于深色配色（主题色圆圈取对应档代表色）
+    val darkTheme = themeMode == ThemeMode.DARK ||
+        (themeMode == ThemeMode.FOLLOW_SYSTEM && isSystemInDarkTheme())
     // 真实版本号随构建自动更新（0.93 起不再硬编码在设置页）
     val versionName = remember {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        }.getOrNull() ?: "1.01"
+        }.getOrNull() ?: "1.02"
     }
 
     // 版本号彩蛋状态
@@ -112,47 +134,49 @@ fun SettingsScreen(settingsViewModel: SettingsViewModel) {
     }
 
     Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-        ) {
-            Text(
-                text = "设置",
-                style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-            )
-
-            // 深色模式：三档即时切换
-            ListItem(
-                headlineContent = { Text("深色模式") },
-                supportingContent = { Text("切换即时生效，无需重启") },
-                leadingContent = { Icon(Icons.Filled.DarkMode, contentDescription = null) }
-            )
-            Row(
+        when (subPage) {
+            null -> Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .fillMaxSize()
+                    .padding(padding)
+                    .verticalScroll(rememberScrollState())
             ) {
-                ThemeMode.entries.forEach { mode ->
-                    FilterChip(
-                        selected = themeMode == mode,
-                        onClick = { settingsViewModel.setThemeMode(mode) },
-                        label = {
-                            Text(
-                                when (mode) {
-                                    ThemeMode.LIGHT -> "浅色"
-                                    ThemeMode.DARK -> "深色"
-                                    ThemeMode.FOLLOW_SYSTEM -> "跟随系统"
-                                }
-                            )
-                        },
+                // 标题行：左侧“设置”，右侧主题色圆圈按钮（进入主题色二级菜单）
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "设置",
+                        style = MaterialTheme.typography.headlineSmall,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Box(
                         modifier = Modifier
-                            .padding(end = 8.dp)
+                            .size(26.dp)
+                            .clip(CircleShape)
+                            .background(themeColorSwatch(themeColor, darkTheme))
+                            .border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                            .clickable { subPage = SettingsSubPage.THEME_COLOR }
                     )
                 }
-            }
+
+                // 深色模式：收进二级菜单，小字提示当前档位
+                ListItem(
+                    headlineContent = { Text("深色模式") },
+                    supportingContent = { Text("当前：${themeModeLabel(themeMode)}") },
+                    leadingContent = { Icon(Icons.Filled.DarkMode, contentDescription = null) },
+                    trailingContent = {
+                        Icon(
+                            Icons.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    modifier = Modifier.clickable { subPage = SettingsSubPage.APPEARANCE }
+                )
 
             // 每行图片个数：2~6，修改后即时生效并重新排版
             ListItem(
@@ -358,6 +382,83 @@ fun SettingsScreen(settingsViewModel: SettingsViewModel) {
                     }
                 }
             )
+            }
+
+            // 二级菜单：深色模式三档（即时生效）
+            SettingsSubPage.APPEARANCE -> Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                SubPageHeader(title = "深色模式", onBack = { subPage = null })
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                ) {
+                    ThemeMode.entries.forEach { mode ->
+                        FilterChip(
+                            selected = themeMode == mode,
+                            onClick = { settingsViewModel.setThemeMode(mode) },
+                            label = { Text(themeModeLabel(mode)) },
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                    }
+                }
+                Text(
+                    "切换即时生效，无需重启",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
+            }
+
+            // 二级菜单：主题色（改变交互选项的颜色）
+            SettingsSubPage.THEME_COLOR -> Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                SubPageHeader(title = "主题色", onBack = { subPage = null })
+                Text(
+                    "改变按钮/开关/选中项等交互选项的颜色，切换即时生效",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
+                ThemeColor.entries.forEach { color ->
+                    ListItem(
+                        headlineContent = { Text(color.label) },
+                        leadingContent = {
+                            Box(
+                                modifier = Modifier
+                                    .size(26.dp)
+                                    .clip(CircleShape)
+                                    .background(themeColorSwatch(color, darkTheme))
+                                    .border(
+                                        1.5.dp,
+                                        MaterialTheme.colorScheme.outlineVariant,
+                                        CircleShape
+                                    )
+                            )
+                        },
+                        trailingContent = {
+                            if (themeColor == color) {
+                                Icon(
+                                    Icons.Filled.Check,
+                                    contentDescription = "当前",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        },
+                        modifier = Modifier.clickable {
+                            settingsViewModel.setThemeColor(color)
+                        }
+                    )
+                }
+            }
         }
     }
 
@@ -437,3 +538,37 @@ fun SettingsScreen(settingsViewModel: SettingsViewModel) {
         )
     }
 }
+
+/** 二级菜单页头：返回箭头 + 标题 */
+@Composable
+private fun SubPageHeader(title: String, onBack: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        IconButton(onClick = onBack) {
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "返回",
+                tint = MaterialTheme.colorScheme.onSurface
+            )
+        }
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(start = 8.dp)
+        )
+    }
+}
+
+/** 深色模式档位的小字文案 */
+private fun themeModeLabel(mode: ThemeMode): String = when (mode) {
+    ThemeMode.LIGHT -> "浅色"
+    ThemeMode.DARK -> "深色"
+    ThemeMode.FOLLOW_SYSTEM -> "跟随系统"
+}
+
+/** 设置页的二级菜单页面 */
+private enum class SettingsSubPage { APPEARANCE, THEME_COLOR }

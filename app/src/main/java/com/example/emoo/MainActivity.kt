@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
             val settingsViewModel: SettingsViewModel = viewModel()
             val galleryViewModel: GalleryViewModel = viewModel()
             val themeMode by settingsViewModel.themeMode.collectAsStateWithLifecycle()
+            val themeColor by settingsViewModel.themeColor.collectAsStateWithLifecycle()
 
             // 应用内切换主题时即时更新状态栏/导航栏图标深浅
             // （enableEdgeToEdge 仅在启动时按系统 uiMode 决定，不会跟随应用内切换）
@@ -73,7 +74,7 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
-            EMOOTheme(themeMode = themeMode) {
+            EMOOTheme(themeMode = themeMode, themeColor = themeColor) {
                 EMOOApp(
                     settingsViewModel = settingsViewModel,
                     galleryViewModel = galleryViewModel

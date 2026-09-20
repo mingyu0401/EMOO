@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import com.example.emoo.data.MetaPreferences
 import com.example.emoo.model.RecentEntry
 import com.example.emoo.model.SendMode
+import com.example.emoo.model.ThemeColor
 import com.example.emoo.model.ThemeMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +21,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     private val _themeMode = MutableStateFlow(meta.getThemeMode())
     val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+
+    /** 主题色（交互强调色），全局即时生效 */
+    private val _themeColor = MutableStateFlow(meta.getThemeColor())
+    val themeColor: StateFlow<ThemeColor> = _themeColor.asStateFlow()
 
     private val _gridColumns = MutableStateFlow(meta.getGridColumns())
     val gridColumns: StateFlow<Int> = _gridColumns.asStateFlow()
@@ -44,6 +49,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun setThemeMode(mode: ThemeMode) {
         meta.setThemeMode(mode)
         _themeMode.value = mode
+    }
+
+    fun setThemeColor(color: ThemeColor) {
+        meta.setThemeColor(color)
+        _themeColor.value = color
     }
 
     fun setGridColumns(columns: Int) {

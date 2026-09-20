@@ -6,7 +6,9 @@ import android.content.Context
 import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -68,8 +70,9 @@ import java.io.File
 /**
  * 大图浏览页：左右滑动切换同列表图片（HorizontalPager），
  * 双指缩放/平移（transformable，单指滑动仍交给 Pager 翻页），
- * 顶栏显示文件名与所在文件夹。
+ * 顶栏显示文件名与所在文件夹；整页长按弹出与网格相同的文件信息弹窗。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ImageViewerScreen(
     viewModel: GalleryViewModel,
@@ -123,6 +126,9 @@ fun ImageViewerScreen(
 
     val current = images[pagerState.currentPage.coerceIn(0, images.lastIndex)]
 
+    // 长按预览图弹出的文件信息弹窗（与网格长按同一组件）
+    var detailImage by remember { mutableStateOf<ImageItem?>(null) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -174,65 +180,96 @@ fun ImageViewerScreen(
                 .weight(1f)
         ) { page ->
             val image = images[page]
-            if (image.isText) {
-                TextReaderPage(image, viewModel)
-            } else {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    AsyncImage(
-                        model = image.uriString,
-                        contentDescription = image.displayName,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clipToBounds()
-                            .graphicsLayer {
-                                scaleX = scale
-                                scaleY = scale
-                                translationX = offsetX
-                                translationY = offsetY
-                            }
-                            .transformable(transformableState)
+            // 整页长按：与网格一致的“更多信息”文件信息弹窗（单击不响应，滑动仍翻页）
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = { detailImage = image }
                     )
-                    // 视频：仅显示封面（首帧），不在应用内播放，提供外部应用打开入口
-                    if (image.isVideo) {
-                        Column(
+            ) {
+                if (image.isText) {
+                    TextReaderPage(image, viewModel)
+                } else {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        AsyncImage(
+                            model = image.uriString,
+                            contentDescription = image.displayName,
+                            contentScale = ContentScale.Fit,
                             modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = 32.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = "视频不在应用内播放",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White.copy(alpha = 0.7f),
-                                modifier = Modifier.padding(bottom = 8.dp)
-                            )
-                            Button(onClick = { openVideoExternal(context, image) }) {
-                                Text("用其他应用打开")
+                                .fillMaxSize()
+                                .clipToBounds()
+                                .graphicsLayer {
+                                    scaleX = scale
+                                    scaleY = scale
+                                    translationX = offsetX
+                                    translationY = offsetY
+                                }
+                                .transformable(transformableState)
+                        )
+                        // 视频：仅显示封面（首帧），不在应用内播放，提供外部应用打开入口
+                        if (image.isVideo) {
+                            Column(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = 32.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = "视频不在应用内播放",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    modifier = Modifier.padding(bottom = 8.dp)
+                                )
+                                Button(onClick = { openVideoExternal(context, image) }) {
+                                    Text("用其他应用打开")
+                                }
                             }
                         }
-                    }
-                    // 全屏浏览：右下角圆形“分享”按钮拉起系统分享；
-                    // Shizuku/无障碍模式下顺带提示小窗发送更方便
-                    FloatingActionButton(
-                        onClick = {
-                            if (MetaPreferences.get(context)
-                                    .getSendMode() != SendMode.NORMAL
-                            ) {
-                                Toast.makeText(context, "小窗更方便哦", Toast.LENGTH_SHORT).show()
-                            }
-                            ImageSender.shareViaSystem(context, image)
-                        },
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(16.dp)
-                    ) {
-                        Icon(Icons.Filled.Share, contentDescription = "分享")
+                        // 长按查看文件信息的提示（位于网格/预览图里外均可用）
+                        Text(
+                            text = "里外均可长按查看更多信息",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.55f),
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 8.dp)
+                        )
+                        // 全屏浏览：右下角圆形“分享”按钮拉起系统分享；
+                        // Shizuku/无障碍模式下顺带提示小窗发送更方便
+                        FloatingActionButton(
+                            onClick = {
+                                if (MetaPreferences.get(context)
+                                        .getSendMode() != SendMode.NORMAL
+                                ) {
+                                    Toast.makeText(context, "小窗更方便哦", Toast.LENGTH_SHORT).show()
+                                }
+                                ImageSender.shareViaSystem(context, image)
+                            },
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(16.dp)
+                        ) {
+                            Icon(Icons.Filled.Share, contentDescription = "分享")
+                        }
                     }
                 }
             }
         }
     }
+
+    // 长按预览图：与网格相同的文件信息弹窗（含重命名/删除；结果用 Toast 提示）
+    ImageDetailSheet(
+        image = detailImage,
+        viewModel = viewModel,
+        usageCount = detailImage?.let { state.usageCounts[it.path] },
+        canReorder = detailImage?.let {
+            state.selectedFolder == it.folderName && !state.searchActive
+        } ?: false,
+        onDismiss = { detailImage = null },
+        onMessage = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
+    )
 }
 
 /** 文字查看页：底色/文字跟随深浅色主题，可滚动显示全文，右下角"复制全文/编辑" */

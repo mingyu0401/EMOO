@@ -6,6 +6,7 @@ import com.example.emoo.model.FolderSort
 import com.example.emoo.model.RecentEntry
 import com.example.emoo.model.SendMode
 import com.example.emoo.model.StickerSortMode
+import com.example.emoo.model.ThemeColor
 import com.example.emoo.model.ThemeMode
 import org.json.JSONArray
 import org.json.JSONObject
@@ -93,6 +94,13 @@ class MetaPreferences private constructor(context: Context) {
 
     fun setThemeMode(mode: ThemeMode) {
         sp.edit().putString(KEY_THEME_MODE, mode.name).apply()
+    }
+
+    /** 主题色（交互强调色），默认紫色 */
+    fun getThemeColor(): ThemeColor = ThemeColor.fromName(sp.getString(KEY_THEME_COLOR, null))
+
+    fun setThemeColor(color: ThemeColor) {
+        sp.edit().putString(KEY_THEME_COLOR, color.name).apply()
     }
 
     /** 网格角标是否显示使用次数 */
@@ -201,6 +209,7 @@ class MetaPreferences private constructor(context: Context) {
         private const val KEY_RECENT = "recent_json"
         private const val KEY_GRID_COLUMNS = "grid_columns"
         private const val KEY_THEME_MODE = "theme_mode"
+        private const val KEY_THEME_COLOR = "theme_color"
         private const val KEY_SHOW_USAGE = "show_usage_count"
         private const val KEY_SEND_MODE = "send_mode"
         private const val KEY_QQ_SEND_MODE = "qq_send_mode"

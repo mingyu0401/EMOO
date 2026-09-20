@@ -12,6 +12,16 @@ enum class ThemeMode {
     }
 }
 
+/** 主题色：驱动 primary/secondary/tertiary，改变按钮、开关、选中项等交互选项的颜色 */
+enum class ThemeColor(val label: String) {
+    PURPLE("紫色"), BLUE("蓝色"), GREEN("绿色"), ORANGE("橙色"), PINK("粉色");
+
+    companion object {
+        fun fromName(name: String?): ThemeColor =
+            entries.firstOrNull { it.name == name } ?: PURPLE
+    }
+}
+
 /**
  * 一键发送（QQ 拖拽 + 微信路径识别）的注入通道。
  * SHIZUKU：纯 Shizuku shell 级实现（窗口检测 + 触摸/文本注入），不触碰无障碍；
